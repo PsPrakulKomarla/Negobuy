@@ -48,3 +48,6 @@ multi-tenant auth, subscription + one-time billing architecture, premium dark 3D
 - P1: Live Stripe/Razorpay checkout + usage metering + entitlements enforcement.
 - P2: Vendor intelligence long-term memory across missions; savings analytics; email outreach channel.
 - P2: Org member invites + role management UI; procurement report export (PDF).
+
+## Fix log — June 2026
+- Google sign-in bug fixed: React StrictMode double-fired AuthCallback effect, exchanging the one-time session_id twice → 401 → bounce to /login. Fixes: useRef processed-guard in AuthCallback, synchronous session_id hash detection in App.js render, AuthProvider skips /me when hash has session_id, redirect target changed to /dashboard per Emergent Auth playbook. Verified: single exchange request, graceful failure path. Real Google account login needs user confirmation.

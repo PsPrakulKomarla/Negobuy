@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
 import { Spinner } from "../components/ui";
@@ -7,8 +7,11 @@ export default function AuthCallback() {
   const { googleSession } = useAuth();
   const navigate = useNavigate();
   const [error, setError] = useState("");
+  const hasProcessed = useRef(false);
 
   useEffect(() => {
+    if (hasProcessed.current) return;
+    hasProcessed.current = true;
     const hash = window.location.hash || "";
     const params = new URLSearchParams(hash.replace(/^#/, ""));
     const sid = params.get("session_id");
@@ -18,7 +21,7 @@ export default function AuthCallback() {
       return;
     }
     googleSession(sid)
-      .then(() => navigate("/dashboard"))
+      .then(() => navigate("/dashboard", { replace: true }))
       .catch(() => {
         setError("Google sign-in failed.");
         setTimeout(() => navigate("/login"), 1800);
@@ -29,7 +32,7 @@ export default function AuthCallback() {
   return (
     <div className="min-h-screen bg-void flex flex-col items-center justify-center gap-4">
       <Spinner className="w-8 h-8" />
-      <p className="text-white/50 text-sm font-mono">
+      <p className="text-white/50 text-sm font-mono" data-testid="auth-callback-status">
         {error || "Establishing secure session…"}
       </p>
     </div>

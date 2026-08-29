@@ -37,7 +37,8 @@ export default function Register() {
   };
 
   const google = () => {
-    const redirect = `${window.location.origin}/auth/callback`;
+    // REMINDER: DO NOT HARDCODE THE URL, OR ADD ANY FALLBACKS OR REDIRECT URLS, THIS BREAKS THE AUTH
+    const redirect = `${window.location.origin}/dashboard`;
     window.location.href = `${GOOGLE_AUTH}?redirect=${encodeURIComponent(redirect)}`;
   };
 

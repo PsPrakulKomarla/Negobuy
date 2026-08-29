@@ -8,6 +8,11 @@ export function AuthProvider({ children }) {
   const [checked, setChecked] = useState(false);
 
   useEffect(() => {
+    // If returning from OAuth callback, skip /me check; AuthCallback exchanges the session_id first.
+    if (window.location.hash?.includes("session_id=")) {
+      setChecked(true);
+      return;
+    }
     if (!getToken()) {
       setUser(false);
       setChecked(true);

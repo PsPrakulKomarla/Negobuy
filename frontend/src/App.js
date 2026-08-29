@@ -39,6 +39,8 @@ function PublicOnly({ children }) {
 
 export default function App() {
   const location = useLocation();
+  // Detect OAuth session_id synchronously during render (before ProtectedRoute runs)
+  if (location.hash?.includes("session_id=")) return <AuthCallback />;
   return (
     <div className="grain min-h-screen">
       <AnimatePresence mode="wait">
