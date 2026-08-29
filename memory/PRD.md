@@ -97,3 +97,12 @@ Added real (credential-gated) architecture, verified by testing agent (backend 1
 - whatsapp.py: added authorized outbound POST /api/whatsapp/send (mission+vendor scoped). Hardened inbound signature: app secret mandatory when WA live.
 - audit.py: unified audit_logs + GET /api/audit; events wired: mission_created, human_approved, payment_order_created, payment_verified, call_started, call_stub_recorded, message_sent.
 Security verified: .env gitignored, no secrets in frontend, org isolation (cross-org mission GET → 404), webhook signature checks, entitlement server-side.
+
+## Exotel voice integration — June 2026 (session 4)
+Verified by testing agent: backend 14/14 (100%), zero bugs.
+- NEW FILE backend/exotel_service.py: provider abstraction (is_configured/config_status/place_outbound_call via Exotel Voice v1 Calls/connect.json, Basic auth key:token) + 4 endpoints under /api/voice/exotel.
+- Endpoints: GET /status (configured/unconfigured, no secrets), POST /call (auth required, org-owned mission+vendor, initiates call, returns session_ref, never exposes creds), POST /session-start (Passthru webhook, shared-secret validated, returns READ-ONLY authority context + rules, cannot mutate authority), POST /session-end (StatusCallback webhook, idempotent by CallSid, stores status/duration/recording/reported_offer, NEVER auto-creates offer/purchase).
+- Security: webhook shared-secret EXOTEL_WEBHOOK_TOKEN (Exotel has no HMAC); refuses unauthenticated webhooks when live; auth+org-isolation on /call; authority computed backend-side only (_authority); no purchase from voice. Secrets never logged (only ok/http/call_sid) or returned.
+- server.py: include exotel_router + exotel block in /api/system/status.
+- .env: EXOTEL_ACCOUNT_SID, EXOTEL_API_KEY, EXOTEL_API_TOKEN, EXOTEL_SUBDOMAIN (provided) + EXOTEL_WEBHOOK_TOKEN (generated). EXOTEL_CALLER_ID (ExoPhone) NOT provided → status honestly NOT_CONFIGURED; optional EXOTEL_APP_ID/EXOTEL_AGENT_NUMBER/EXOTEL_STREAM_URL supported for the answered-call flow.
+- Regression suites: tests/test_new_features.py, test_audit_pass.py, test_exotel.py.

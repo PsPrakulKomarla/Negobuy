@@ -26,6 +26,7 @@ import vendor_memory
 import audit
 from payments import router as payments_router, webhook_router as razorpay_webhook_router
 from telephony import router as telephony_router
+from exotel_service import router as exotel_router, config_status as exotel_status
 from landed_cost import compute_landed_cost
 
 app = FastAPI(title="NegoBuy API")
@@ -68,6 +69,7 @@ async def system_status(user: dict = Depends(get_current_user)):
                   "configured": voice_configured(), "provider": "openai_realtime"},
         "telephony": {"state": "READY" if telephony_configured() else "NOT_CONFIGURED",
                       "configured": telephony_configured(), "provider": "twilio"},
+        "exotel": exotel_status(),
         "whatsapp": {"state": "READY" if wa_configured() else "NOT_CONFIGURED",
                      "configured": wa_configured(), "provider": "meta_cloud_api"},
         "payments": {"state": razorpay, "configured": razorpay != "NOT_CONFIGURED",
@@ -583,6 +585,7 @@ app.include_router(audit.router)
 app.include_router(payments_router)
 app.include_router(razorpay_webhook_router)
 app.include_router(telephony_router)
+app.include_router(exotel_router)
 
 
 @app.on_event("startup")
