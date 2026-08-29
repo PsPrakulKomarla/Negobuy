@@ -198,6 +198,19 @@ def _check_webhook_token(params: dict):
         raise HTTPException(status_code=401, detail="Webhook secret not configured")
 
 
+def _normalize_number(num: str | None) -> str | None:
+    if not num:
+        return None
+    n = num.strip().replace(" ", "").replace("-", "")
+    if n.startswith("+"):
+        return n
+    if n.isdigit() and len(n) == 10:
+        return "+91" + n
+    if n.startswith("0") and len(n) == 11 and n[1:].isdigit():
+        return "+91" + n[1:]
+    return n
+
+
 def _authority(mission: dict) -> dict:
     """Authority limits are computed by the backend ONLY — the source of truth."""
     qty = mission.get("quantity") or 1
@@ -216,6 +229,15 @@ def _authority(mission: dict) -> dict:
 @router.get("/status")
 async def exotel_status(user: dict = Depends(get_current_user)):
     return await live_status()
+
+
+@router.get("/session/{session_ref}")
+async def get_session(session_ref: str, user: dict = Depends(get_current_user)):
+    doc = await get_db().voice_sessions.find_one(
+        {"session_ref": session_ref, "organization_id": user["organization_id"]}, {"_id": 0})
+    if not doc:
+        raise HTTPException(status_code=404, detail="Session not found")
+    return doc
 
 
 class CallBody(BaseModel):
@@ -237,7 +259,7 @@ async def start_call(body: CallBody, user: dict = Depends(get_current_user)):
         raise HTTPException(status_code=404, detail="Vendor not found")
 
     status = config_status()
-    to_number = body.to_number or (vendor.get("contact_phones") or [None])[0]
+    to_number = _normalize_number(body.to_number or (vendor.get("contact_phones") or [None])[0])
 
     session_ref = uuid.uuid4().hex
     authority = _authority(mission)

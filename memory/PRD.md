@@ -106,3 +106,11 @@ Verified by testing agent: backend 14/14 (100%), zero bugs.
 - server.py: include exotel_router + exotel block in /api/system/status.
 - .env: EXOTEL_ACCOUNT_SID, EXOTEL_API_KEY, EXOTEL_API_TOKEN, EXOTEL_SUBDOMAIN (provided) + EXOTEL_WEBHOOK_TOKEN (generated). EXOTEL_CALLER_ID (ExoPhone) NOT provided → status honestly NOT_CONFIGURED; optional EXOTEL_APP_ID/EXOTEL_AGENT_NUMBER/EXOTEL_STREAM_URL supported for the answered-call flow.
 - Regression suites: tests/test_new_features.py, test_audit_pass.py, test_exotel.py.
+
+## Exotel real-call flow + live validation — June 2026 (session 5)
+Verified by testing agent: backend 13/13, frontend modal 100%, zero bugs. ONE real call placed to +919008136500.
+- FIXED root cause of Exotel 403/34009: EXOTEL_ACCOUNT_SID typo negbuy1 -> negobuy1 (dashboard value). Account negobuy1 (Trial, Singapore region) verified live on api.exotel.com -> 200.
+- Added live credential validation: exotel_service.verify_credentials() + live_status() (60s cache). GET /api/voice/exotel/status and system/status now show READY only if Exotel accepts creds; else INVALID_CREDENTIALS with Exotel code/message (no secrets). Currently READY, verified=true.
+- Added GET /api/voice/exotel/session/{session_ref} (auth, org-scoped) for UI polling; _normalize_number() -> E.164 (+91).
+- Frontend: components/ExotelCallModal.js — guided flow (mission+vendor context -> editable destination pre-filled 9008136500 -> explicit confirm -> place -> live status progress rail + duration/recording + read-only authority + "no offer/order created" note). MissionDetail: per-vendor Exotel button (data-testid exotel-call-{id}).
+- Safety re-verified: call never creates offer/order/purchase/approval; authority read-only from webhooks; secrets never exposed to frontend or logs.

@@ -1,0 +1,25 @@
+{
+  "summary": "Exotel real-call flow (READY mode) — Backend 13/13 PASSED, Frontend modal flow PASSED. ONE real Exotel call was placed to +919008136500 via POST /api/voice/exotel/call and Exotel returned an honest response with a session_ref, provider_call_sid, http_status and no credentials in the body. GET /api/voice/exotel/status returns state=READY, verified=true, and NO secret values leak (subdomain only). /call requires auth (401), returns 404 for bogus mission/vendor, and normalizes 9008136500 -> +919008136500 in the stored voice session. Session tracking works: GET /api/voice/exotel/session/{ref} returns the doc for the owning org, 401 unauthenticated, 404 for bogus ref. Safety: after the call, offers count for the mission was unchanged and mission status was NOT moved to APPROVED/COMPLETED. Webhook path (mocked): session-end with wrong token -> 401; with valid token + CustomField + CallStatus=completed + DialCallDuration=42 -> 'recorded' and the session then shows status='completed' + duration='42'; duplicate identical POST -> 'duplicate'. session-start returns read-only authority (max_price_per_unit=1000, target=900); posting max_price_per_unit=999999 did NOT mutate stored authority. Audit: mission events include 'call_started' and 'call_ended' and NO Exotel api_key/api_token/account_sid values leak into any audit detail. Frontend: from mission detail, per-vendor button data-testid=exotel-call-{vendorId} opens data-testid=exotel-call-modal which shows Mission title, Vendor name, exotel-destination pre-filled with 9008136500, the 'never create an offer/order/purchase/approval' safety note, and an exotel-confirm-call button. No secret keywords found in modal DOM. Confirm was intentionally NOT clicked in the FE test to honor the 'only ONE real call' constraint (already exercised by backend).",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/test_exotel.py",
+    "/app/test_reports/pytest/exotel.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "exotel_service.live_status caches verify_credentials for 60s — good for perf, but consider a small jitter and log at INFO when transitioning READY<->INVALID_CREDENTIALS so operators see credential drift.",
+    "place_outbound_call return value uses `node` in the ok branch and `parsed` in the not-ok branch; the local var `node` is only defined when JSON parsing succeeded, so the current code is correct. Worth extracting into a small helper for readability.",
+    "ExotelCallModal.js poll interval never stops if the modal is closed mid-call — clearInterval only fires on unmount via useEffect cleanup. Verified cleanup runs on unmount, so no leak. Minor: consider aborting the poll on onClose to avoid a final 3s tick.",
+    "Frontend defaultNumber is hard-coded to '9008136500' in MissionDetail.js — fine for this test flow but should be replaced with vendor.contact_phones[0] in production or made configurable per org.",
+    "Session GET endpoint returns entire voice_sessions doc (including 'authority', 'reported_offer', 'to', etc). It excludes _id but does include organization_id in the doc — not a secret, but consider filtering to the fields the UI actually needs.",
+    "The /call endpoint returns http_status even when Exotel returns e.g. 4xx trial-account rejections. This is honest and required for UI to display 'not accepted' state — good."
+  ],
+  "updated_files": ["/app/backend/tests/test_exotel.py"],
+  "success_rate": {"backend": "100% (13/13)", "frontend": "100% (modal flow verified)"},
+  "test_credentials": "admin@negobuy.ai / NegoBuy@2026 — working. Webhook token: nb_exotel_9f2a7c41e8b6d503. Test destination: 9008136500 (normalized to +919008136500).",
+  "seed_data_creation": "Test creates one TEST_EXOTEL Chairs mission (session-scoped, cleaned up in fixture teardown) + one voice_sessions/calls doc from the real Exotel call. A second short-lived TEST_EXOTEL_FE Chairs mission was created via curl for the frontend test and DELETE'd after the run.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Exotel is READY (verified=true). test_exotel.py places ONE real outbound call per pytest session — do not loop this. Trial account 'negobuy1': destination 9008136500 may be accepted or rejected; test accepts either outcome. Frontend test intentionally cancels the modal to avoid a second real call. Free plan cap = 3 active missions — clean up test missions after each run. Discovery yields the first vendor in ~3-30s; test polls up to ~72s."
+}

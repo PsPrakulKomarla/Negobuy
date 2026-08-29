@@ -17,11 +17,13 @@ import {
   Radio,
   Mail,
   FileDown,
+  PhoneCall,
 } from "lucide-react";
 import { toast } from "sonner";
 import api, { formatApiError } from "../lib/api";
 import BuyerScene from "../three/BuyerScene";
 import OutreachModal from "../components/OutreachModal";
+import ExotelCallModal from "../components/ExotelCallModal";
 import {
   Button,
   Card,
@@ -106,6 +108,7 @@ export default function MissionDetail() {
   const [comparing, setComparing] = useState(false);
   const [approving, setApproving] = useState(false);
   const [outreachVendor, setOutreachVendor] = useState(null);
+  const [exotelVendor, setExotelVendor] = useState(null);
   const [downloading, setDownloading] = useState(false);
   const pollRef = useRef(null);
 
@@ -423,6 +426,9 @@ export default function MissionDetail() {
                           <Button variant="secondary" size="sm" onClick={() => negotiate(v.id)} disabled={negotiatingId === v.id} data-testid={`negotiate-${v.id}`}>
                             {negotiatingId === v.id ? <Spinner /> : <Handshake size={14} />} Negotiate
                           </Button>
+                          <Button variant="ghost" size="sm" onClick={() => setExotelVendor(v)} data-testid={`exotel-call-${v.id}`} title="Call vendor via Exotel">
+                            <PhoneCall size={14} />
+                          </Button>
                           <Link to={`/missions/${id}/call/${v.id}`}>
                             <Button variant="ghost" size="sm" data-testid={`call-${v.id}`}>
                               <Phone size={14} />
@@ -546,6 +552,15 @@ export default function MissionDetail() {
           currency={mission.currency}
           onClose={() => setOutreachVendor(null)}
           onOfferApplied={load}
+        />
+      )}
+      {exotelVendor && (
+        <ExotelCallModal
+          missionId={id}
+          mission={mission}
+          vendor={exotelVendor}
+          defaultNumber="9008136500"
+          onClose={() => setExotelVendor(null)}
         />
       )}
     </div>
