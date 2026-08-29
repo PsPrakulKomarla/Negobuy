@@ -11,6 +11,7 @@ Design rules enforced here:
 Verified against Exotel Voice v1 docs (Calls/connect + Passthru/StatusCallback), June 2026.
 """
 import os
+import time
 import uuid
 import logging
 from datetime import datetime, timezone
@@ -62,6 +63,59 @@ def config_status() -> dict:
         "message": ("Exotel voice calling is ready." if configured else
                     "Exotel needs " + ", ".join(missing) + " to place calls."),
     }
+
+
+_CRED_CACHE = {"ts": 0.0, "result": None}
+
+
+async def verify_credentials(force: bool = False) -> dict:
+    """Live auth check against Exotel (non-call). Cached 60s. Never exposes secrets."""
+    if not is_configured():
+        return {"valid": False, "reason": "not_configured"}
+    now = time.time()
+    if not force and _CRED_CACHE["result"] is not None and now - _CRED_CACHE["ts"] < 60:
+        return _CRED_CACHE["result"]
+    sid = os.environ["EXOTEL_ACCOUNT_SID"]
+    key = os.environ["EXOTEL_API_KEY"]
+    token = os.environ["EXOTEL_API_TOKEN"]
+    sub = os.environ["EXOTEL_SUBDOMAIN"]
+    try:
+        async with httpx.AsyncClient(timeout=8) as client:
+            r = await client.get(f"https://{sub}/v1/Accounts/{sid}.json", auth=(key, token))
+        if r.status_code < 300:
+            res = {"valid": True, "http": r.status_code}
+        else:
+            code = msg = None
+            try:
+                ex = (r.json() or {}).get("RestException") or {}
+                code, msg = ex.get("Code"), ex.get("Message")
+            except Exception:
+                pass
+            res = {"valid": False, "http": r.status_code, "code": code, "message": msg}
+    except Exception:
+        res = {"valid": False, "http": None, "error": "provider_unreachable"}
+    _CRED_CACHE.update({"ts": now, "result": res})
+    return res
+
+
+async def live_status() -> dict:
+    """Presence + live credential verification. Only READY if Exotel accepts the creds."""
+    base = config_status()
+    if not base["configured"]:
+        return base
+    v = await verify_credentials()
+    if v.get("valid"):
+        base["state"] = "READY"
+        base["verified"] = True
+        base["message"] = "Exotel voice calling is ready (credentials verified)."
+    else:
+        base["state"] = "INVALID_CREDENTIALS"
+        base["verified"] = False
+        base["credential_error"] = {k: v.get(k) for k in ("http", "code", "message", "error")
+                                    if v.get(k) is not None}
+        base["message"] = ("Exotel credentials are present but were rejected by Exotel — "
+                           "verify EXOTEL_ACCOUNT_SID and the subdomain/region.")
+    return base
 
 
 async def place_outbound_call(to_number: str, status_callback_url: str,
@@ -161,7 +215,7 @@ def _authority(mission: dict) -> dict:
 # --------------------------------------------------------------------------- #
 @router.get("/status")
 async def exotel_status(user: dict = Depends(get_current_user)):
-    return config_status()
+    return await live_status()
 
 
 class CallBody(BaseModel):
