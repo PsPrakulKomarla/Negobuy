@@ -89,3 +89,11 @@ Implemented & wired:
 - WHATSAPP: `whatsapp.py` — Meta Cloud API webhook verify + inbound handler routed through central AI agent; NOT_CONFIGURED without creds.
 
 Still NOT_CONFIGURED (need creds): Twilio telephony (phone calls), Razorpay payments, WhatsApp Cloud API, Tavily key (keyless works). SendGrid needs a verified sender to actually deliver.
+
+## Audit-completion pass — June 2026 (session 3)
+Added real (credential-gated) architecture, verified by testing agent (backend 15/15 + prior 19/19):
+- payments.py (Razorpay): POST /api/billing/orders (server-side order), POST /api/billing/verify (HMAC signature), POST /api/webhooks/razorpay (signature + idempotent webhook_events + entitlement activation only after verified payment). NOT_CONFIGURED until RAZORPAY_KEY_ID/SECRET/WEBHOOK_SECRET.
+- telephony.py (Twilio): POST /api/voice/calls (outbound initiate + call record), GET /api/voice/calls, POST /api/voice/twiml/{id}. NOT_CONFIGURED until TWILIO_* (+OPENAI_API_KEY for realtime bridge).
+- whatsapp.py: added authorized outbound POST /api/whatsapp/send (mission+vendor scoped). Hardened inbound signature: app secret mandatory when WA live.
+- audit.py: unified audit_logs + GET /api/audit; events wired: mission_created, human_approved, payment_order_created, payment_verified, call_started, call_stub_recorded, message_sent.
+Security verified: .env gitignored, no secrets in frontend, org isolation (cross-org mission GET → 404), webhook signature checks, entitlement server-side.

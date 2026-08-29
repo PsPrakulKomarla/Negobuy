@@ -23,6 +23,9 @@ import discovery
 import orchestrator
 import entitlements
 import vendor_memory
+import audit
+from payments import router as payments_router, webhook_router as razorpay_webhook_router
+from telephony import router as telephony_router
 from landed_cost import compute_landed_cost
 
 app = FastAPI(title="NegoBuy API")
@@ -153,6 +156,8 @@ async def create_mission(body: MissionCreate, user: dict = Depends(get_current_u
     await db.missions.insert_one(mission)
     await orchestrator.log_action(mission["id"], "Requirement Agent", "Mission created",
                                   mission["title"])
+    await audit.log_event(user["organization_id"], "mission_created", actor=user.get("name"),
+                          mission_id=mission["id"], detail=mission["title"])
     mission.pop("_id", None)
     return mission
 
@@ -448,6 +453,9 @@ async def approve(mission_id: str, body: ApprovalBody, user: dict = Depends(get_
         await orchestrator.set_status(mission_id, "APPROVED")
         await orchestrator.log_action(mission_id, "Approval Agent", "Purchase approved",
                                       f"Approved by {user.get('name')} — {offer.get('vendor_name') if offer else ''}")
+        await audit.log_event(user["organization_id"], "human_approved", actor=user.get("name"),
+                              mission_id=mission_id,
+                              detail=f"Approved {offer.get('vendor_name') if offer else ''}")
     elif action == "REJECT":
         await orchestrator.set_status(mission_id, "REJECTED")
         await orchestrator.log_action(mission_id, "Approval Agent", "Rejected", body.note or "")
@@ -571,6 +579,10 @@ app.include_router(reports_router)
 app.include_router(outreach_router)
 app.include_router(whatsapp_router)
 app.include_router(whatsapp_status_router)
+app.include_router(audit.router)
+app.include_router(payments_router)
+app.include_router(razorpay_webhook_router)
+app.include_router(telephony_router)
 
 
 @app.on_event("startup")

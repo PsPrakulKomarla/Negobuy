@@ -8,10 +8,12 @@ import uuid
 from datetime import datetime, timezone
 import httpx
 from fastapi import APIRouter, Depends, Request, Response, HTTPException
+from pydantic import BaseModel
 from auth import get_current_user
 from db import get_db
 import ai_service
 import orchestrator
+import audit
 
 router = APIRouter(prefix="/api/webhooks", tags=["whatsapp"])
 status_router = APIRouter(prefix="/api/whatsapp", tags=["whatsapp"])
@@ -41,6 +43,46 @@ async def whatsapp_status(user: dict = Depends(get_current_user)):
     }
 
 
+class WASendBody(BaseModel):
+    mission_id: str
+    vendor_id: str
+    to_number: str | None = None
+    message: str
+
+
+@status_router.post("/send")
+async def whatsapp_send(body: WASendBody, user: dict = Depends(get_current_user)):
+    """Authorized outbound WhatsApp message, tied to a legitimate mission + vendor."""
+    db = get_db()
+    vendor = await db.vendors.find_one(
+        {"id": body.vendor_id, "mission_id": body.mission_id}, {"_id": 0})
+    if not vendor:
+        raise HTTPException(status_code=404, detail="Vendor not found")
+    mission = await db.missions.find_one(
+        {"id": body.mission_id, "organization_id": user["organization_id"]}, {"_id": 0})
+    if not mission:
+        raise HTTPException(status_code=404, detail="Mission not found")
+    to = body.to_number or (vendor.get("contact_phones") or [None])[0]
+    if not wa_configured():
+        return {"status": "NOT_CONFIGURED", "provider": "meta_cloud_api",
+                "required": ["WHATSAPP_ACCESS_TOKEN", "WHATSAPP_PHONE_NUMBER_ID",
+                             "WHATSAPP_VERIFY_TOKEN", "WHATSAPP_APP_SECRET"],
+                "message": "WhatsApp Cloud API not configured — cannot send."}
+    if not to:
+        raise HTTPException(status_code=400, detail="No vendor WhatsApp number on record")
+    result = await _send_whatsapp(to, body.message)
+    await db.messages.insert_one({
+        "id": uuid.uuid4().hex, "channel": "whatsapp", "direction": "outbound",
+        "to": to, "text": body.message, "delivery": result,
+        "mission_id": body.mission_id, "vendor_id": body.vendor_id,
+        "organization_id": user["organization_id"], "created_at": _now()})
+    await orchestrator.log_action(body.mission_id, "WhatsApp Agent",
+                                  f"WhatsApp sent to {vendor.get('name')}", body.message[:80])
+    await audit.log_event(user["organization_id"], "message_sent", mission_id=body.mission_id,
+                          actor=user.get("name"), detail=f"WhatsApp to {vendor.get('name')}")
+    return {"result": result}
+
+
 @router.get("/whatsapp")
 async def verify(request: Request):
     """Meta webhook verification handshake."""
@@ -56,7 +98,8 @@ async def verify(request: Request):
 def _valid_signature(raw: bytes, signature: str | None) -> bool:
     secret = os.environ.get("WHATSAPP_APP_SECRET")
     if not secret:
-        return True  # cannot validate without secret; allow but log
+        # If WhatsApp is live, an app secret is mandatory — reject unsigned webhooks.
+        return not wa_configured()
     if not signature or not signature.startswith("sha256="):
         return False
     digest = hmac.new(secret.encode(), raw, hashlib.sha256).hexdigest()
