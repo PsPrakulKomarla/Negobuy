@@ -1,0 +1,160 @@
+{
+  "theme": "dark",
+  "typography": {
+    "heading_font": "Unbounded",
+    "body_font": "Manrope",
+    "mono_font": "JetBrains Mono",
+    "scale": {
+      "h1": "text-4xl sm:text-5xl lg:text-6xl tracking-tighter font-bold",
+      "h2": "text-2xl sm:text-3xl lg:text-4xl tracking-tight",
+      "h3": "text-xl sm:text-2xl tracking-tight",
+      "h4": "text-lg sm:text-xl",
+      "body": "text-base leading-relaxed",
+      "labels": "text-xs tracking-[0.2em] uppercase"
+    },
+    "rules": [
+      "Never use Inter, Roboto, Open Sans for headings. Use Unbounded for a futuristic spatial UI feel.",
+      "Limit H1 to text-6xl ceiling. Do not use text-7xl or above.",
+      "Headlines > 32px MUST use tracking-tight.",
+      "Variable weights: Mix font-light and font-black for tension and contrast."
+    ]
+  },
+  "colors": {
+    "archetype": "Electric & Neon + Luxury",
+    "palette": {
+      "background": "#05050A",
+      "surface_base": "rgba(255, 255, 255, 0.03)",
+      "surface_glass": "rgba(10, 15, 28, 0.6)",
+      "primary": "#00E5FF",
+      "primary_glow": "rgba(0, 229, 255, 0.5)",
+      "secondary": "#00FF66",
+      "accent": "#FF3366",
+      "text_primary": "#FFFFFF",
+      "text_secondary": "rgba(255, 255, 255, 0.7)",
+      "border": "rgba(255, 255, 255, 0.1)"
+    },
+    "rules": [
+      "Use tinted greys, never pure #000000 or #808080. The background is a Deepest Void Black.",
+      "Avoid teal green or teal blue (#1B93A4) for dashboards. Use Cyan (#00E5FF).",
+      "Forbidden color: #7351B7.",
+      "Hover state color must be a lighter hue of the active state."
+    ]
+  },
+  "visual_enhancers": {
+    "surfaces": [
+      "Glassmorphism (Crystal Variant): Used for sticky headers, modal overlays, floating spatial UI cards. Requires backdrop-blur-xl or 2xl, bg-black/60, and a delicate 1px inner stroke (border-white/10).",
+      "Tracing Beam: Animated glowing border for active missions and live call UI cards. Use a framer-motion div tracing the border with blur-md.",
+      "Grid Borders: Visible skeleton for data-heavy sections (vendor comparisons). Use border-r border-b border-white/10."
+    ],
+    "shadows": [
+      "Ambient Shadow: shadow-[0_8px_32px_rgba(0,0,0,0.4)] for glass cards.",
+      "Neon Glow: drop-shadow-[0_0_8px_rgba(0,229,255,0.5)] for primary active 3D UI elements."
+    ],
+    "rules": [
+      "DO NOT use complete transparent background in header, overlays, or any surface with content underneath.",
+      "Never apply one surface style globally. Mix glass for floating UI with solid flat cards for heavy data.",
+      "Images/3D backgrounds must have appropriate overlays to maintain text contrast (APCA compliant)."
+    ]
+  },
+  "grids_layouts": {
+    "marketing_page": "The 'Tetris' Grid (Mode A). Asymmetry, gap-8 to gap-12. Span logic mixing Hero, Square, Tall, Filler.",
+    "dashboard": "High Density Grid (Mode B). gap-4 or gap-6. Every pixel utilized, h-full on children.",
+    "spatial_ui": "UI elements float over a fixed 3D canvas (z-index: 10). Use generous padding (p-8, p-12) for layout breathing room.",
+    "rules": [
+      "Containers with borders MUST have internal padding (p-6 or p-8) to prevent text collision.",
+      "Mobile-first responsive grids.",
+      "Direct Children Only for Grid items."
+    ]
+  },
+  "motion": {
+    "animations": [
+      "Hover states: translate-y-[-2px] with glow effect.",
+      "Entrance: Staggered fade-up for list items (Framer Motion).",
+      "Waveform: Dynamic height scaling for live AI voice calls.",
+      "Transitions: Use specific properties, never 'all' (e.g. transition: transform 0.2s ease, opacity 0.2s ease)."
+    ],
+    "rules": [
+      "Respect prefers-reduced-motion.",
+      "Ensure meaning isn't conveyed only through motion."
+    ]
+  },
+  "3d_libraries": {
+    "primary": "React Three Fiber (R3F) + Drei",
+    "effects": "@react-three/postprocessing (Bloom, Vignette, Noise)",
+    "usage": [
+      "Central AI Buyer orchestration network visualization.",
+      "Dynamic glowing nodes representing vendors/discovery/verification/negotiation statuses.",
+      "Animate transitions between states (e.g. 50 candidate nodes -> 20 shortlisted -> 10 verified).",
+      "Must have adequate lighting (<Environment>, ambientLight, pointLight).",
+      "Render as a fixed full-screen canvas underneath the UI HUD layer."
+    ]
+  },
+  "components": {
+    "shadcn_customization": [
+      "Use pure HTML+Tailwind for spatial layout structure.",
+      "Use Shadcn for Interactive logic (Forms, Modals, Select). Strip 'Vercel-look'.",
+      "Use sonner for toasts.",
+      "Use @phosphor-icons/react (duotone weight) or lucide-react for icons."
+    ],
+    "custom_elements": [
+      "Live Voice Call UI: Vendor avatar, call status, elapsed time, waveform visualizer, live transcript, AI listening state.",
+      "Vendor Comparison UI: Tables, charts, cost breakdown, risk indicators.",
+      "Pipeline Timeline: Real-time activity feed with glowing nodes."
+    ]
+  },
+  "media": {
+    "images": [
+      {
+        "url": "https://images.unsplash.com/photo-1674027444485-cec3da58eef4?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NTYxODd8MHwxfHNlYXJjaHwyfHxhYnN0cmFjdCUyMDNkJTIwZ2xvd2luZyUyMG5vZGVzJTIwbmV0d29ya3xlbnwwfHx8fDE3ODgwMjUzMjN8MA&ixlib=rb-4.1.0&q=85",
+        "description": "Abstract 3D glowing nodes",
+        "category": "Hero Section Background / Fallback for 3D network"
+      },
+      {
+        "url": "https://images.pexels.com/photos/7433853/pexels-photo-7433853.jpeg?auto=compress&cs=tinysrgb&dpr=2&h=650&w=940",
+        "description": "Business meeting",
+        "category": "Human Approval / Enterprise Trust section"
+      },
+      {
+        "url": "https://images.pexels.com/photos/4487383/pexels-photo-4487383.jpeg?auto=compress&cs=tinysrgb&dpr=2&h=650&w=940",
+        "description": "Warehouse handling packages",
+        "category": "Logistics / Procurement visual reference"
+      }
+    ],
+    "rules": [
+      "No placeholder images. Use curated URLs.",
+      "Mobile images max height 80vh."
+    ]
+  },
+  "accessibility": {
+    "rules": [
+      "Normal text: Min 4.5:1 contrast ratio.",
+      "Large text: Min 3:1 contrast ratio.",
+      "Always explicitly set text color on hover.",
+      "All interactive elements MUST include data-testid attribute in kebab-case format."
+    ]
+  },
+  "UNIVERSAL_GUIDELINES_FOR_MAIN_AGENT": [
+    "Do not converge toward generic outputs. Avoid 'AI slop' aesthetic.",
+    "Dark colors look good independently without gradients. DO NOT use dark colors as gradients.",
+    "Don't make generic centered layouts. DO NOT center align the app container (.App { text-align: center; }).",
+    "Create depth through layered design elements with z-index hierarchy and spatial UI.",
+    "Use glass-morphism effects with backdrop filters (12-24px blur) and 1px borders.",
+    "MUST NOT apply universal transition (e.g., transition: all).",
+    "Always use modern button styles (pill-shaped or sharp with interaction animations).",
+    "NEVER use AI assistant Emoji characters (🤖, 🧠, 💡, 🔮, 🎯) for icons. Use proper icon libraries.",
+    "Every interaction needs micro-animations.",
+    "Use 2-3x more spacing than feels comfortable.",
+    "Add subtle grain textures and noise overlays for premium feel.",
+    "DO NOT use complete transparent backgrounds for overlays or headers.",
+    "Add `data-testid` attributes to interactive elements."
+  ],
+  "instructions_to_main_agent": [
+    "This project uses .js/.jsx files (not .tsx). Adjust all implementation commands accordingly.",
+    "Install required 3D dependencies: npm install three @react-three/fiber @react-three/drei @react-three/postprocessing",
+    "Install icon library: npm install @phosphor-icons/react or lucide-react",
+    "Use framer-motion for UI transitions and spatial pop-ins.",
+    "Build a full-screen R3F Canvas as a background provider. Overlay the UI using pointer-events-none on containers and pointer-events-auto on interactive elements.",
+    "For the 3D visualization, map application state (vendors discovered, shortlisted) to 3D node counts and colors.",
+    "Use Unbounded font for headings, Manrope for body text. Inject via Google Fonts in index.html."
+  ]
+}
