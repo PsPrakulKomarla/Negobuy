@@ -1,16 +1,10 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { useParams, Link } from "react-router-dom";
 import { motion } from "framer-motion";
-import {
-  ArrowLeft,
-  PhoneOff,
-  Mic,
-  Settings,
-  Target,
-  ShieldAlert,
-  Radio,
-} from "lucide-react";
+import { ArrowLeft, PhoneOff, Mic, Settings, Target, ShieldAlert, Radio } from "lucide-react";
+import { toast } from "sonner";
 import api from "../lib/api";
+import RealtimeAudioChat from "../lib/RealtimeAudioChat";
 import { Button, Card, Spinner, SectionLabel, StatusPill } from "../components/ui";
 
 function Waveform({ active }) {
@@ -21,11 +15,7 @@ function Waveform({ active }) {
         <motion.span
           key={i}
           className="w-1 rounded-full bg-primary"
-          animate={
-            active
-              ? { height: [6, 10 + Math.random() * 60, 6] }
-              : { height: 4 }
-          }
+          animate={active ? { height: [6, 10 + Math.random() * 60, 6] } : { height: 4 }}
           transition={{
             duration: 0.7 + Math.random() * 0.6,
             repeat: active ? Infinity : 0,
@@ -39,12 +29,24 @@ function Waveform({ active }) {
   );
 }
 
+function fmt(sec) {
+  const m = Math.floor(sec / 60);
+  const s = Math.floor(sec % 60);
+  return `${m}:${s.toString().padStart(2, "0")}`;
+}
+
 export default function VoiceCall() {
   const { id, vendorId } = useParams();
-  const [status, setStatus] = useState(null); // voice config status
+  const [status, setStatus] = useState(null);
   const [mission, setMission] = useState(null);
   const [vendor, setVendor] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [callState, setCallState] = useState("READY"); // READY|CONNECTING|CONNECTED|LISTENING|SPEAKING|ENDED|FAILED
+  const [transcript, setTranscript] = useState([]);
+  const [elapsed, setElapsed] = useState(0);
+  const chatRef = useRef(null);
+  const timerRef = useRef(null);
+  const startRef = useRef(0);
 
   useEffect(() => {
     Promise.all([
@@ -58,6 +60,11 @@ export default function VoiceCall() {
         setVendor(vs.find((v) => v.id === vendorId));
       })
       .finally(() => setLoading(false));
+    return () => {
+      chatRef.current?.stop();
+      clearInterval(timerRef.current);
+    };
+    // eslint-disable-next-line
   }, [id, vendorId]);
 
   if (loading)
@@ -68,9 +75,63 @@ export default function VoiceCall() {
     );
 
   const configured = status?.configured;
+  const remaining = status?.minutes?.remaining;
   const qty = mission?.quantity || 1;
   const maxPrice = mission?.budget && qty ? Math.round(mission.budget / qty) : null;
   const target = maxPrice ? Math.round(maxPrice * 0.9) : null;
+  const active = ["CONNECTED", "LISTENING", "SPEAKING"].includes(callState);
+
+  const instructions =
+    `You are NegoBuy's AI procurement buyer negotiating by voice with ${vendor?.name || "a supplier"}. ` +
+    `Mission: procure ${mission?.quantity || ""} ${mission?.title || ""} delivered to ${mission?.delivery_location || "the buyer"}` +
+    `${mission?.deadline_days ? ` within ${mission.deadline_days} days` : ""}. ` +
+    `Negotiate professionally and naturally toward a target price of ${mission?.currency || ""} ${target || "the best possible"} per unit. ` +
+    `You are NEVER authorized to exceed ${mission?.currency || ""} ${maxPrice || "the buyer's maximum"} per unit or to make binding commitments. ` +
+    `Ask about pricing, MOQ, lead time, warranty and payment terms. Be concise and human.`;
+
+  const startTimer = () => {
+    startRef.current = Date.now();
+    timerRef.current = setInterval(() => {
+      setElapsed((Date.now() - startRef.current) / 1000);
+    }, 500);
+  };
+
+  const startCall = async () => {
+    if (remaining === 0) {
+      toast.error("You're out of voice minutes on this plan. Upgrade to continue.");
+      return;
+    }
+    setTranscript([]);
+    setCallState("CONNECTING");
+    const chat = new RealtimeAudioChat({
+      instructions,
+      onState: (s) => setCallState(s),
+      onError: () => toast.error("Could not start the call. Check microphone permissions."),
+      onTranscript: (t) => {
+        if (!t.done) return;
+        setTranscript((prev) => [...prev, { role: t.role, text: t.text }]);
+      },
+    });
+    chatRef.current = chat;
+    try {
+      await chat.init();
+      startTimer();
+    } catch (_) {}
+  };
+
+  const endCall = async () => {
+    chatRef.current?.stop();
+    clearInterval(timerRef.current);
+    setCallState("ENDED");
+    const secs = elapsed;
+    setElapsed(0);
+    if (secs > 1) {
+      try {
+        const { data } = await api.post("/voice/usage", { seconds: secs });
+        setStatus((s) => ({ ...s, minutes: data }));
+      } catch (_) {}
+    }
+  };
 
   return (
     <div className="p-6 lg:p-10 max-w-6xl mx-auto">
@@ -79,7 +140,6 @@ export default function VoiceCall() {
       </Link>
 
       <div className="grid lg:grid-cols-3 gap-6">
-        {/* Call stage */}
         <div className="lg:col-span-2">
           <Card glass className="p-8 relative overflow-hidden">
             <div className="absolute -top-20 -right-20 w-72 h-72 bg-primary/10 blur-[100px] rounded-full" />
@@ -88,7 +148,10 @@ export default function VoiceCall() {
                 <div className="flex items-center gap-2 text-xs font-mono tracking-widest text-primary/80">
                   <Radio size={13} /> LIVE CALL INTERFACE
                 </div>
-                <StatusPill status={configured ? "CONTACTING" : "DRAFT"} />
+                <div className="flex items-center gap-3">
+                  {active && <span className="text-xs font-mono text-primary" data-testid="call-timer">{fmt(elapsed)}</span>}
+                  <StatusPill status={active ? "CONTACTING" : configured ? "REQUIREMENT_REVIEW" : "DRAFT"} />
+                </div>
               </div>
 
               <div className="text-center mb-6">
@@ -97,23 +160,13 @@ export default function VoiceCall() {
                     {(vendor?.name || "V").slice(0, 1).toUpperCase()}
                   </span>
                 </div>
-                <h2 className="font-display text-2xl font-bold tracking-tight">
-                  {vendor?.name || "Vendor"}
-                </h2>
-                <p className="text-white/40 text-sm mt-1">
-                  {configured ? "Ready to connect" : "Voice negotiation offline"}
+                <h2 className="font-display text-2xl font-bold tracking-tight">{vendor?.name || "Vendor"}</h2>
+                <p className="text-white/40 text-sm mt-1" data-testid="call-state">
+                  {configured ? callState.replace(/_/g, " ").toLowerCase() : "Voice negotiation offline"}
                 </p>
               </div>
 
-              <Waveform active={false} />
-
-              <div className="flex items-center justify-center gap-2 mt-6 text-xs font-mono text-white/40">
-                {["CONNECTING", "LISTENING", "THINKING", "SPEAKING", "NEGOTIATING", "COMPLETED"].map((s) => (
-                  <span key={s} className="px-2 py-1 rounded border border-white/10">
-                    {s}
-                  </span>
-                ))}
-              </div>
+              <Waveform active={active && callState !== "LISTENING"} />
 
               {!configured ? (
                 <div className="mt-8 rounded-2xl border border-yellow-400/25 bg-yellow-400/5 p-5">
@@ -121,28 +174,25 @@ export default function VoiceCall() {
                     <Settings size={16} /> Requires configuration
                   </div>
                   <p className="text-sm text-white/60 leading-relaxed">
-                    {status?.message ||
-                      "Realtime voice negotiation requires an OpenAI Realtime API key."}{" "}
-                    The full call architecture (WebRTC, live transcript, negotiation
-                    context) is wired and ready — add <span className="font-mono text-white/80">OPENAI_API_KEY</span> to
-                    place real vendor calls.
+                    {status?.message || "Realtime voice needs an OpenAI Realtime API key."}
                   </p>
-                  <div className="mt-4 flex gap-2 text-[11px] font-mono text-white/40">
-                    {status?.requires?.map((r) => (
-                      <span key={r} className="px-2 py-1 rounded bg-black/40 border border-white/10">
-                        {r}
-                      </span>
-                    ))}
-                  </div>
                 </div>
               ) : (
-                <div className="mt-8 flex justify-center gap-4">
-                  <Button size="lg" data-testid="start-call-btn">
-                    <Mic size={18} /> Start call
-                  </Button>
-                  <Button size="lg" variant="danger">
-                    <PhoneOff size={18} /> End
-                  </Button>
+                <div className="mt-8 flex flex-col items-center gap-3">
+                  <div className="flex justify-center gap-4">
+                    {!active ? (
+                      <Button size="lg" onClick={startCall} disabled={callState === "CONNECTING"} data-testid="start-call-btn">
+                        {callState === "CONNECTING" ? <Spinner /> : <Mic size={18} />} Start call
+                      </Button>
+                    ) : (
+                      <Button size="lg" variant="danger" onClick={endCall} data-testid="end-call-btn">
+                        <PhoneOff size={18} /> End call
+                      </Button>
+                    )}
+                  </div>
+                  <p className="text-[11px] text-white/40 font-mono">
+                    {remaining != null ? `${remaining} voice min remaining on your plan` : "Unlimited voice minutes"}
+                  </p>
                 </div>
               )}
             </div>
@@ -150,17 +200,27 @@ export default function VoiceCall() {
 
           <div className="mt-6">
             <SectionLabel>Live transcript</SectionLabel>
-            <Card className="p-6 min-h-[160px] flex items-center justify-center">
-              <p className="text-white/30 text-sm text-center">
-                {configured
-                  ? "Transcript will stream here during the call."
-                  : "No live transcript — voice negotiation is not configured. NegoBuy never fabricates a conversation."}
-              </p>
+            <Card className="p-6 min-h-[160px]" data-testid="transcript-panel">
+              {transcript.length ? (
+                <div className="space-y-3">
+                  {transcript.map((t, i) => (
+                    <div key={i} className={`text-sm ${t.role === "ai" ? "text-primary" : "text-white/80"}`}>
+                      <span className="text-[10px] font-mono uppercase tracking-wider mr-2 opacity-60">
+                        {t.role === "ai" ? "AI Buyer" : "Vendor"}
+                      </span>
+                      {t.text}
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <p className="text-white/30 text-sm text-center py-6">
+                  {active ? "Listening… transcript will appear as you speak." : "Transcript will stream here during the call."}
+                </p>
+              )}
             </Card>
           </div>
         </div>
 
-        {/* Objective / authority */}
         <div className="space-y-6">
           <div>
             <SectionLabel>Negotiation objective</SectionLabel>
@@ -185,8 +245,7 @@ export default function VoiceCall() {
               <Row label="Target price" value={target ? `${mission.currency} ${target}/unit` : "—"} accent="text-secondary" />
               <Row label="Max authorized" value={maxPrice ? `${mission.currency} ${maxPrice}/unit` : "—"} accent="text-accent" />
               <p className="text-[11px] text-white/40 pt-2 border-t hairline">
-                The AI negotiates toward target and never exceeds the authorized
-                maximum without your explicit approval.
+                The AI negotiates toward target and never exceeds the authorized maximum without your explicit approval.
               </p>
             </Card>
           </div>

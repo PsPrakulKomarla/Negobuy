@@ -130,12 +130,17 @@ Schema:
 }"""
 
 
+def negotiation_turn_prompt_memory(constraints):
+    note = constraints.get("memory_note")
+    return f"\nVENDOR MEMORY (prior dealings): {note}" if note else ""
+
+
 async def negotiation_turn(mission: dict, vendor: dict, constraints: dict,
                            history: list, session_id: str) -> dict:
     hist = "\n".join(f"{h['role']}: {h['text']}" for h in history[-8:]) or "(no prior messages)"
     prompt = f"""MISSION: {mission.get('title')} — qty {mission.get('quantity')}, deliver to {mission.get('delivery_location')} by {mission.get('deadline_days')} days.
 VENDOR: {vendor.get('name')}
-AUTHORITY LIMITS: max_price_per_unit={constraints.get('max_price')}, target_price={constraints.get('target_price')}, min_warranty={constraints.get('min_warranty')}, latest_delivery_days={constraints.get('max_delivery_days')}
+AUTHORITY LIMITS: max_price_per_unit={constraints.get('max_price')}, target_price={constraints.get('target_price')}, min_warranty={constraints.get('min_warranty')}, latest_delivery_days={constraints.get('max_delivery_days')}{negotiation_turn_prompt_memory(constraints)}
 CONVERSATION SO FAR:
 {hist}
 

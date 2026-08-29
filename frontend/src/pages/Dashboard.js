@@ -14,6 +14,17 @@ import {
 import api from "../lib/api";
 import { useAuth } from "../context/AuthContext";
 import {
+  LineChart,
+  Line,
+  BarChart,
+  Bar,
+  XAxis,
+  YAxis,
+  Tooltip,
+  ResponsiveContainer,
+  CartesianGrid,
+} from "recharts";
+import {
   Button,
   Card,
   StatusPill,
@@ -34,12 +45,18 @@ const STAT_CARDS = [
 export default function Dashboard() {
   const { user } = useAuth();
   const [stats, setStats] = useState(null);
+  const [analytics, setAnalytics] = useState(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    api
-      .get("/dashboard/stats")
-      .then((r) => setStats(r.data))
+    Promise.all([
+      api.get("/dashboard/stats").then((r) => r.data),
+      api.get("/dashboard/analytics").then((r) => r.data).catch(() => null),
+    ])
+      .then(([s, a]) => {
+        setStats(s);
+        setAnalytics(a);
+      })
       .finally(() => setLoading(false));
   }, []);
 
@@ -92,6 +109,70 @@ export default function Dashboard() {
           </motion.div>
         ))}
       </div>
+
+      {/* Analytics */}
+      {analytics && (analytics.status_breakdown?.length > 0 || analytics.savings_over_time?.length > 0) && (
+        <div className="mb-10">
+          <SectionLabel>Procurement analytics</SectionLabel>
+          <div className="grid lg:grid-cols-2 gap-4">
+            <Card className="p-6" data-testid="analytics-savings">
+              <div className="flex items-center justify-between mb-4">
+                <div className="text-sm text-white/60">Savings vs spend</div>
+                <div className="text-xs font-mono text-secondary">
+                  ₹<AnimatedNumber value={analytics.total_savings || 0} /> saved
+                </div>
+              </div>
+              {analytics.savings_over_time?.length ? (
+                <ResponsiveContainer width="100%" height={220}>
+                  <LineChart data={analytics.savings_over_time}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.06)" />
+                    <XAxis dataKey="month" stroke="rgba(255,255,255,0.4)" fontSize={11} />
+                    <YAxis stroke="rgba(255,255,255,0.4)" fontSize={11} />
+                    <Tooltip contentStyle={{ background: "#0a0e14", border: "1px solid rgba(255,255,255,0.1)", borderRadius: 12, color: "#fff" }} />
+                    <Line type="monotone" dataKey="spend" stroke="#00e5ff" strokeWidth={2} dot={false} name="Spend" />
+                    <Line type="monotone" dataKey="savings" stroke="#0f9d6a" strokeWidth={2} dot={false} name="Savings" />
+                  </LineChart>
+                </ResponsiveContainer>
+              ) : (
+                <p className="text-white/30 text-sm text-center py-16">Approve a purchase to see savings accrue here.</p>
+              )}
+            </Card>
+
+            <Card className="p-6" data-testid="analytics-status">
+              <div className="text-sm text-white/60 mb-4">Missions by stage</div>
+              {analytics.status_breakdown?.length ? (
+                <ResponsiveContainer width="100%" height={220}>
+                  <BarChart data={analytics.status_breakdown}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.06)" />
+                    <XAxis dataKey="status" stroke="rgba(255,255,255,0.4)" fontSize={9} interval={0} angle={-20} textAnchor="end" height={60} />
+                    <YAxis allowDecimals={false} stroke="rgba(255,255,255,0.4)" fontSize={11} />
+                    <Tooltip contentStyle={{ background: "#0a0e14", border: "1px solid rgba(255,255,255,0.1)", borderRadius: 12, color: "#fff" }} cursor={{ fill: "rgba(255,255,255,0.04)" }} />
+                    <Bar dataKey="count" fill="#00e5ff" radius={[6, 6, 0, 0]} />
+                  </BarChart>
+                </ResponsiveContainer>
+              ) : (
+                <p className="text-white/30 text-sm text-center py-16">No missions yet.</p>
+              )}
+            </Card>
+          </div>
+          {analytics.top_vendors?.length > 0 && (
+            <Card className="p-6 mt-4" data-testid="analytics-vendors">
+              <div className="text-sm text-white/60 mb-4">Remembered suppliers ({analytics.vendors_remembered})</div>
+              <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-3">
+                {analytics.top_vendors.map((v, i) => (
+                  <div key={i} className="flex items-center justify-between rounded-xl border border-white/8 bg-white/5 px-4 py-3">
+                    <div className="min-w-0">
+                      <div className="text-sm truncate">{v.name}</div>
+                      <div className="text-[11px] text-white/40">{v.negotiations} negotiation(s)</div>
+                    </div>
+                    {v.best_price != null && <div className="text-xs font-mono text-secondary shrink-0">best {v.best_price}</div>}
+                  </div>
+                ))}
+              </div>
+            </Card>
+          )}
+        </div>
+      )}
 
       <div className="grid lg:grid-cols-5 gap-6">
         {/* Missions */}

@@ -1,0 +1,21 @@
+{
+  "summary": "Full end-to-end backend + frontend testing of NegoBuy new feature expansion (system status, entitlements/402, mission lifecycle, negotiation, vendor memory, dashboard analytics, outreach compose/strategy/contact/send/reply-parse/apply-offer/summary, PDF report, voice status+usage metering, team invite lifecycle, WhatsApp status/webhook verify). All 19 pytest cases pass (100%). Frontend UI verified: admin login, Dashboard renders, Team page invite form (invite-email, invite-role, invite-submit) present with admin member listed, mission detail exposes download-report-btn + Outreach modal with compose/thread/reply tabs, and Voice page shows Start-call button with remaining minutes. No console errors during login->dashboard->team->mission-detail->voice flows.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": ["/app/backend/tests/test_new_features.py", "/app/test_reports/pytest/new_features.xml"],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "server.py is 581 lines and now bundles missions, negotiation, offers, comparison, approval, dashboard and vendor-memory routers. Consider splitting missions/negotiation/offers into their own modules (like outreach.py) for maintainability - it is nearing the 700-line guideline.",
+    "outreach.py uses '$_id' from an existing document (from the non-projected find_one on line 41) to $push messages. This works but couples the code to Mongo internals; consider using the 'id' field for updates for consistency with the rest of the codebase.",
+    "discovery.web_search does not handle Tavily 4xx/5xx gracefully in all call paths -- keyless mode occasionally returns 0 vendors with no logged reason. Consider logging Tavily response body when hits is empty so operators can distinguish rate-limits from empty results.",
+    "voice.py register_realtime() registers the OpenAI realtime router only at startup; if OPENAI_API_KEY is rotated at runtime the app must restart. Acceptable but worth documenting."
+  ],
+  "updated_files": ["/app/backend/tests/test_new_features.py"],
+  "success_rate": {"backend": "100% (19/19)", "frontend": "100%"},
+  "test_credentials": "admin@negobuy.ai / NegoBuy@2026 (admin) - working. Login response returns access_token + user fields flat (not nested under 'user').",
+  "seed_data_creation": "Test file (test_new_features.py) creates its own TEST missions and cleans them up. If Tavily keyless discovery returns 0 vendors, the fixture inserts one synthetic vendor into Mongo (mission_id-scoped) so outreach/negotiation tests still run; that vendor is removed when the parent mission is deleted at teardown. One ad-hoc UI-test mission was created for the playwright pass and deleted at the end.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Regression file: /app/backend/tests/test_new_features.py. Fresh admin login returns access_token+user profile flat at top-level (email/id/role/etc). Free plan active_missions limit=3 -> POST /api/missions returns 402 on 4th active. Tavily keyless discovery is flaky (often 0 vendors) - tests seed a synthetic vendor if needed. SendGrid sender is unverified so /outreach/send returns result.ok=false but records the outbound message in the thread (this is treated as PASS). Voice OPENAI key configured, minutes.remaining decrements as expected. WhatsApp/Twilio/Razorpay all NOT_CONFIGURED by design.",
+  "rca of the issue": "N/A - no bugs discovered."
+}

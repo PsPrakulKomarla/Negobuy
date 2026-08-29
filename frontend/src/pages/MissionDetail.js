@@ -15,10 +15,13 @@ import {
   AlertTriangle,
   ArrowLeft,
   Radio,
+  Mail,
+  FileDown,
 } from "lucide-react";
 import { toast } from "sonner";
 import api, { formatApiError } from "../lib/api";
 import BuyerScene from "../three/BuyerScene";
+import OutreachModal from "../components/OutreachModal";
 import {
   Button,
   Card,
@@ -102,6 +105,8 @@ export default function MissionDetail() {
   const [negotiatingId, setNegotiatingId] = useState(null);
   const [comparing, setComparing] = useState(false);
   const [approving, setApproving] = useState(false);
+  const [outreachVendor, setOutreachVendor] = useState(null);
+  const [downloading, setDownloading] = useState(false);
   const pollRef = useRef(null);
 
   const load = useCallback(async () => {
@@ -185,8 +190,7 @@ export default function MissionDetail() {
     }
   };
 
-  const approve = async (action, offerId) => {
-    setApproving(true);
+  const approve = async (action, offerId) => {    setApproving(true);
     try {
       await api.post(`/missions/${id}/approve`, { action, offer_id: offerId });
       toast.success(
@@ -197,6 +201,25 @@ export default function MissionDetail() {
       toast.error(formatApiError(err.response?.data?.detail));
     } finally {
       setApproving(false);
+    }
+  };
+
+  const downloadReport = async () => {
+    setDownloading(true);
+    try {
+      const res = await api.get(`/missions/${id}/report`, { responseType: "blob" });
+      const url = URL.createObjectURL(res.data);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `NegoBuy-${(mission.title || "report").replace(/\s+/g, "_")}.pdf`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      toast.error("Could not generate the report.");
+    } finally {
+      setDownloading(false);
     }
   };
 
@@ -239,6 +262,9 @@ export default function MissionDetail() {
             {mission.deadline_days && <span>{mission.deadline_days} day deadline</span>}
           </div>
         </div>
+        <Button variant="secondary" size="sm" onClick={downloadReport} disabled={downloading} data-testid="download-report-btn">
+          {downloading ? <Spinner /> : <FileDown size={15} />} Download report
+        </Button>
       </div>
 
       <Card glass className="p-4 mb-6">
@@ -385,7 +411,15 @@ export default function MissionDetail() {
                           <a href={v.website} target="_blank" rel="noreferrer" className="text-white/40 hover:text-primary transition-colors" title="Evidence source">
                             <ExternalLink size={15} />
                           </a>
+                          {v.memory && (
+                            <span className="text-[10px] font-mono text-secondary/80" title={`Known supplier · best ${mission.currency} ${v.memory.best_price ?? "?"}`}>
+                              ★ known
+                            </span>
+                          )}
                           <div className="flex-1" />
+                          <Button variant="ghost" size="sm" onClick={() => setOutreachVendor(v)} data-testid={`outreach-${v.id}`}>
+                            <Mail size={14} />
+                          </Button>
                           <Button variant="secondary" size="sm" onClick={() => negotiate(v.id)} disabled={negotiatingId === v.id} data-testid={`negotiate-${v.id}`}>
                             {negotiatingId === v.id ? <Spinner /> : <Handshake size={14} />} Negotiate
                           </Button>
@@ -504,6 +538,16 @@ export default function MissionDetail() {
           </AnimatePresence>
         </div>
       </div>
+
+      {outreachVendor && (
+        <OutreachModal
+          missionId={id}
+          vendor={outreachVendor}
+          currency={mission.currency}
+          onClose={() => setOutreachVendor(null)}
+          onOfferApplied={load}
+        />
+      )}
     </div>
   );
 }

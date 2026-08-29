@@ -4,7 +4,7 @@ import time
 import pytest
 import requests
 
-BASE_URL = os.environ.get("REACT_APP_BACKEND_URL", "https://ee06e3f1-dd83-4c55-aea1-01683f3fad5d.preview.emergentagent.com").rstrip("/")
+BASE_URL = os.environ.get("REACT_APP_BACKEND_URL", "https://magical-sanderson-11.preview.emergentagent.com").rstrip("/")
 API = f"{BASE_URL}/api"
 
 BUYER_EMAIL = "buyer@test.com"
