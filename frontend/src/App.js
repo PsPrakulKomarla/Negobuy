@@ -14,6 +14,8 @@ import NewMission from "./pages/NewMission";
 import MissionDetail from "./pages/MissionDetail";
 import VoiceCall from "./pages/VoiceCall";
 import Pricing from "./pages/Pricing";
+import Team from "./pages/Team";
+import AcceptInvite from "./pages/AcceptInvite";
 
 function FullLoader() {
   return (
@@ -50,6 +52,7 @@ export default function App() {
           <Route path="/login" element={<PublicOnly><Login /></PublicOnly>} />
           <Route path="/register" element={<PublicOnly><Register /></PublicOnly>} />
           <Route path="/auth/callback" element={<AuthCallback />} />
+          <Route path="/accept-invite" element={<AcceptInvite />} />
 
           <Route
             element={
@@ -63,6 +66,7 @@ export default function App() {
             <Route path="/missions/new" element={<NewMission />} />
             <Route path="/missions/:id" element={<MissionDetail />} />
             <Route path="/missions/:id/call/:vendorId" element={<VoiceCall />} />
+            <Route path="/team" element={<Team />} />
             <Route path="/plans" element={<Pricing embedded />} />
           </Route>
 

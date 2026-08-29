@@ -73,3 +73,19 @@ multi-tenant auth, subscription + one-time billing architecture, premium dark 3D
   (Approve/Negotiate/Reject) → mission complete + seal ring.
 - User choices honoured: scroll-driven; scripted demo on a state-driven architecture; persistent Skip/Sign-in;
   reduced-motion fallback. Verified by testing agent (frontend 100%, zero console errors) + screenshots.
+
+## Feature expansion — June 2026 (session 2)
+User asked to "complete all incomplete items". Keys provided: OpenAI (voice), SendGrid (email). Payments (Razorpay) left NOT_CONFIGURED per user + no keys. WhatsApp/Twilio architecture present, NOT_CONFIGURED.
+
+Implemented & wired:
+- LIVE VOICE: OpenAI Realtime over browser WebRTC (frontend `lib/RealtimeAudioChat.js`, `pages/VoiceCall.js`). Backend `voice.py` registers emergent realtime router at /api/voice/realtime/{session,negotiate}; minute metering via /api/voice/usage + entitlements. Requires real mic to fully exercise.
+- EMAIL OUTREACH (SendGrid): `email_service.py` — AI compose/parse-reply/strategy/contact-suggest/thread-summary (GPT-5.6) using user-provided prompts; `outreach.py` router (compose/send/reply/apply-offer/thread/summary/strategy/contact). Frontend `components/OutreachModal.js` + Email button per vendor in MissionDetail. SENDER_EMAIL must be a VERIFIED SendGrid sender or sends 403 (surfaced honestly).
+- CROSS-MISSION VENDOR MEMORY: `vendor_memory.py`; recorded on negotiation + email offer; injected into negotiation prompt; shown as "★ known" badge; org-wide GET /api/vendors/memory; dashboard "remembered suppliers".
+- SAVINGS ANALYTICS: GET /api/dashboard/analytics + recharts on Dashboard (savings vs spend line, missions-by-stage bar, remembered suppliers).
+- TEAM & ROLES: `team.py` — members, invite (emailed via SendGrid), role change, remove (detaches to own workspace), public accept-invite. Frontend `pages/Team.js` + `pages/AcceptInvite.js` + nav item + /accept-invite route.
+- PDF EXPORT: `reports.py` (reportlab) GET /api/missions/{id}/report; "Download report" button in MissionDetail.
+- PLAN ENTITLEMENTS: `entitlements.py` — active-mission quota enforced on create (free=3), voice-minute metering (free=30). billing PLANS limits updated.
+- INTEGRATION STATUS: /api/system/status now reports ai/discovery/email/voice/telephony/whatsapp/payments as CONFIGURED/READY/NOT_CONFIGURED/TEST/LIVE. Razorpay orders stub /api/billing/orders returns NOT_CONFIGURED honestly.
+- WHATSAPP: `whatsapp.py` — Meta Cloud API webhook verify + inbound handler routed through central AI agent; NOT_CONFIGURED without creds.
+
+Still NOT_CONFIGURED (need creds): Twilio telephony (phone calls), Razorpay payments, WhatsApp Cloud API, Tavily key (keyless works). SendGrid needs a verified sender to actually deliver.

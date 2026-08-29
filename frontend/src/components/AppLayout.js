@@ -7,6 +7,7 @@ import {
   CreditCard,
   LogOut,
   ChevronRight,
+  Users,
 } from "lucide-react";
 import { useAuth } from "../context/AuthContext";
 
@@ -14,6 +15,7 @@ const NAV = [
   { to: "/dashboard", label: "Command Center", icon: LayoutDashboard },
   { to: "/missions", label: "Missions", icon: Target },
   { to: "/missions/new", label: "New Mission", icon: Plus },
+  { to: "/team", label: "Team", icon: Users },
   { to: "/plans", label: "Plans", icon: CreditCard },
 ];
 

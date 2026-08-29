@@ -11,10 +11,18 @@ from pydantic import BaseModel
 from db import get_db, create_indexes
 from auth import router as auth_router, get_current_user, seed_admin
 from billing import router as billing_router
-from voice import router as voice_router, register_realtime, voice_configured
+from voice import (router as voice_router, register_realtime, voice_configured,
+                   telephony_configured)
+from team import router as team_router
+from reports import router as reports_router
+from outreach import router as outreach_router
+from whatsapp import router as whatsapp_router, status_router as whatsapp_status_router, wa_configured
+from email_service import email_configured, sender_email
 import ai_service
 import discovery
 import orchestrator
+import entitlements
+import vendor_memory
 from landed_cost import compute_landed_cost
 
 app = FastAPI(title="NegoBuy API")
@@ -43,12 +51,24 @@ async def root():
 
 @core.get("/system/status")
 async def system_status(user: dict = Depends(get_current_user)):
+    razorpay = ("LIVE" if os.environ.get("RAZORPAY_KEY_ID", "").startswith("rzp_live")
+                else "TEST" if os.environ.get("RAZORPAY_KEY_ID") else "NOT_CONFIGURED")
     return {
-        "ai": {"configured": ai_service.is_configured(), "model": os.environ.get("LLM_MODEL")},
-        "discovery": {"configured": discovery.search_configured(),
+        "ai": {"state": "CONFIGURED" if ai_service.is_configured() else "NOT_CONFIGURED",
+               "configured": ai_service.is_configured(), "model": os.environ.get("LLM_MODEL"),
+               "provider": "openai"},
+        "discovery": {"state": "CONFIGURED", "configured": discovery.search_configured(),
                       "has_key": discovery.has_search_key(), "provider": "tavily"},
-        "voice": {"configured": voice_configured(), "provider": "openai_realtime"},
-        "payments": {"configured": bool(os.environ.get("STRIPE_API_KEY")), "provider": "stripe"},
+        "email": {"state": "CONFIGURED" if email_configured() else "NOT_CONFIGURED",
+                  "configured": email_configured(), "sender": sender_email(), "provider": "sendgrid"},
+        "voice": {"state": "READY" if voice_configured() else "NOT_CONFIGURED",
+                  "configured": voice_configured(), "provider": "openai_realtime"},
+        "telephony": {"state": "READY" if telephony_configured() else "NOT_CONFIGURED",
+                      "configured": telephony_configured(), "provider": "twilio"},
+        "whatsapp": {"state": "READY" if wa_configured() else "NOT_CONFIGURED",
+                     "configured": wa_configured(), "provider": "meta_cloud_api"},
+        "payments": {"state": razorpay, "configured": razorpay != "NOT_CONFIGURED",
+                     "provider": "razorpay"},
     }
 
 
@@ -117,6 +137,7 @@ async def extract(body: ExtractBody, user: dict = Depends(get_current_user)):
 
 @missions.post("")
 async def create_mission(body: MissionCreate, user: dict = Depends(get_current_user)):
+    await entitlements.check_mission_quota(user)
     db = get_db()
     mission = body.model_dump()
     mission.update({
@@ -182,6 +203,12 @@ async def mission_vendors(mission_id: str, user: dict = Depends(get_current_user
     await _get_mission(mission_id, user)
     docs = await get_db().vendors.find({"mission_id": mission_id}, {"_id": 0}) \
         .sort("weighted_score", -1).to_list(50)
+    for v in docs:
+        mem = await vendor_memory.get_memory(user["organization_id"], v.get("domain"))
+        if mem and mem.get("missions") and mission_id not in mem["missions"]:
+            v["memory"] = {"negotiations_count": mem.get("negotiations_count"),
+                           "best_price": mem.get("best_price"),
+                           "last_price": mem.get("last_price")}
     return docs
 
 
@@ -218,6 +245,8 @@ async def negotiate(mission_id: str, vendor_id: str, body: NegotiateBody,
         "min_warranty": mission.get("warranty_requirements"),
         "max_delivery_days": mission.get("deadline_days"),
     }
+    mem = await vendor_memory.get_memory(user["organization_id"], vendor.get("domain"))
+    constraints["memory_note"] = vendor_memory.memory_note(mem)
     session = f"nego-{mission_id}-{vendor_id}"
     history = []
     events = []
@@ -279,6 +308,8 @@ async def negotiate(mission_id: str, vendor_id: str, body: NegotiateBody,
         }
         await db.offers.delete_many({"mission_id": mission_id, "vendor_id": vendor_id})
         await db.offers.insert_one(offer)
+        await vendor_memory.record_outcome(user["organization_id"], vendor, mission_id,
+                                            final["price"], source="negotiation_preview")
     return negotiation
 
 
@@ -471,12 +502,75 @@ async def stats(user: dict = Depends(get_current_user)):
     }
 
 
+@dashboard.get("/analytics")
+async def analytics(user: dict = Depends(get_current_user)):
+    db = get_db()
+    org = user["organization_id"]
+    all_missions = await db.missions.find({"organization_id": org}, {"_id": 0}).to_list(1000)
+    mids = [m["id"] for m in all_missions]
+    purchases = await db.purchases.find({"mission_id": {"$in": mids}}, {"_id": 0}).to_list(1000)
+    pmap = {p["mission_id"]: p for p in purchases}
+
+    # Savings & spend over time (by month of mission creation), only for concluded purchases.
+    buckets = {}
+    by_category = {}
+    for m in all_missions:
+        month = (m.get("created_at") or "")[:7] or "unknown"
+        b = buckets.setdefault(month, {"month": month, "savings": 0.0, "spend": 0.0, "missions": 0})
+        b["missions"] += 1
+        p = pmap.get(m["id"])
+        if p and p.get("total_cost"):
+            b["spend"] += p["total_cost"]
+            cat = m.get("category") or "Other"
+            by_category[cat] = round(by_category.get(cat, 0) + p["total_cost"], 2)
+            if m.get("budget"):
+                diff = m["budget"] - p["total_cost"]
+                if diff > 0:
+                    b["savings"] += diff
+    series = sorted(buckets.values(), key=lambda x: x["month"])
+    for s in series:
+        s["savings"] = round(s["savings"], 2)
+        s["spend"] = round(s["spend"], 2)
+
+    mem = await vendor_memory.list_memory(org)
+    top_vendors = [{"name": v.get("name"), "negotiations": v.get("negotiations_count"),
+                    "best_price": v.get("best_price")} for v in mem[:6]]
+    status_counts = {}
+    for m in all_missions:
+        status_counts[m["status"]] = status_counts.get(m["status"], 0) + 1
+
+    return {
+        "savings_over_time": series,
+        "spend_by_category": [{"category": k, "spend": v} for k, v in by_category.items()],
+        "top_vendors": top_vendors,
+        "status_breakdown": [{"status": k.replace("_", " "), "count": v}
+                             for k, v in status_counts.items()],
+        "total_spend": round(sum(s["spend"] for s in series), 2),
+        "total_savings": round(sum(s["savings"] for s in series), 2),
+        "vendors_remembered": len(mem),
+    }
+
+
+vendors_r = APIRouter(prefix="/api/vendors", tags=["vendors"])
+
+
+@vendors_r.get("/memory")
+async def vendor_memory_list(user: dict = Depends(get_current_user)):
+    return await vendor_memory.list_memory(user["organization_id"])
+
+
 app.include_router(auth_router)
 app.include_router(core)
 app.include_router(missions)
 app.include_router(dashboard)
+app.include_router(vendors_r)
 app.include_router(billing_router)
 app.include_router(voice_router)
+app.include_router(team_router)
+app.include_router(reports_router)
+app.include_router(outreach_router)
+app.include_router(whatsapp_router)
+app.include_router(whatsapp_status_router)
 
 
 @app.on_event("startup")

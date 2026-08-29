@@ -16,7 +16,7 @@ PLANS = [
         "interval": None,
         "features": ["1 active mission", "Vendor discovery", "AI requirement extraction",
                      "Landed-cost comparison"],
-        "limits": {"active_missions": 1, "voice_minutes": 0},
+        "limits": {"active_missions": 3, "voice_minutes": 30},
     },
     {
         "id": "mission", "name": "Procurement Mission", "type": "one_time", "price": None,
@@ -77,3 +77,30 @@ async def create_checkout(plan_id: str, user: dict = Depends(get_current_user)):
     return {"status": "not_configured",
             "message": "Stripe integration point ready — awaiting live checkout implementation.",
             "plan": plan}
+
+
+def razorpay_state() -> str:
+    kid = os.environ.get("RAZORPAY_KEY_ID", "")
+    if kid.startswith("rzp_live"):
+        return "LIVE"
+    if kid:
+        return "TEST"
+    return "NOT_CONFIGURED"
+
+
+@router.post("/orders/{plan_id}")
+async def create_order(plan_id: str, user: dict = Depends(get_current_user)):
+    """Razorpay order creation. Returns NOT_CONFIGURED until Razorpay keys are set."""
+    plan = next((p for p in PLANS if p["id"] == plan_id), None)
+    if not plan:
+        return {"error": "UNKNOWN_PLAN", "message": "Unknown plan."}
+    state = razorpay_state()
+    if state == "NOT_CONFIGURED":
+        return {"status": "NOT_CONFIGURED", "provider": "razorpay",
+                "message": ("Payments require RAZORPAY_KEY_ID / RAZORPAY_KEY_SECRET. "
+                            "The order + webhook-verification architecture is implemented and "
+                            "activates once keys are configured."),
+                "required": ["RAZORPAY_KEY_ID", "RAZORPAY_KEY_SECRET", "RAZORPAY_WEBHOOK_SECRET"],
+                "plan": plan}
+    # With keys present, a real Razorpay order would be created here and verified via webhook.
+    return {"status": "READY", "mode": state, "provider": "razorpay", "plan": plan}
