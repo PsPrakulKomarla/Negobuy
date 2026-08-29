@@ -25,8 +25,12 @@ multi-tenant auth, subscription + one-time billing architecture, premium dark 3D
   landed_cost.py, negotiation via ai_service, voice.py (OpenAI Realtime, gated), billing.py, server.py.
 - DB: MongoDB (uuid string ids). Collections: users, organizations, memberships, missions, vendors,
   offers, negotiations, comparisons, agent_actions, approvals, purchases, login_attempts, password_reset_tokens.
-- Frontend (React CRA): R3F 3D BuyerScene (state-driven node network), Tailwind, framer-motion, sonner.
+- Frontend (React CRA): Tailwind, framer-motion, sonner, React Three Fiber + drei.
   Auth via Bearer token in localStorage (cookies also set as fallback).
+- **Landing = cinematic 3D journey** (`src/three/experience/`): scroll-driven, one continuous world
+  centered on an angular AI command **monolith** (NOT a sphere/brain). 11 connected scenes driven by
+  framer-motion `useScroll` progress → camera keyframe path (`CameraRig`) + per-scene fade/scale
+  presence (`World`). Text lives in 2D overlays (`Overlays`). Reduced-motion + WebGL fallback = `ReducedStory`.
 
 ## Implemented (2026-06)
 - Auth: register/login/logout/me/refresh/forgot/reset, roles (owner/admin/buyer/viewer), org/workspace, Google session.
@@ -51,3 +55,21 @@ multi-tenant auth, subscription + one-time billing architecture, premium dark 3D
 
 ## Fix log — June 2026
 - Google sign-in bug fixed: React StrictMode double-fired AuthCallback effect, exchanging the one-time session_id twice → 401 → bounce to /login. Fixes: useRef processed-guard in AuthCallback, synchronous session_id hash detection in App.js render, AuthProvider skips /me when hash has session_id, redirect target changed to /dashboard per Emergent Auth playbook. Verified: single exchange request, graceful failure path. Real Google account login needs user confirmation.
+
+## Cinematic 3D landing rebuild — June 2026
+- Replaced the old sphere/orbit-node hero (which was exactly the forbidden "glowing sphere / AI brain")
+  with a full scroll-driven cinematic 3D story per user brief.
+- New module `src/three/experience/`: `Experience.js` (Canvas + framer useScroll + TopNav with
+  `skip-intro`/`nav-login` + `ProgressRail` + reduced-motion & WebGL error fallback),
+  `World.js` (persistent monolith + Grid floor + fog + Sparkles + 11 fading `<Scene>` groups),
+  `CameraRig.js` (11 keyframe camera path), `primitives.js` (Monolith, Kiosk, Beam w/ traveling packet,
+  Shard, instanced MarketField filtering funnel, CostTower, SealRing), `Overlays.js` (2D scene copy,
+  data-testids `story-scene-0..10`, CTA buttons `story-approve/negotiate/reject-btn`, `story-final-cta`,
+  `story-pricing`), `story.js` (scripted illustrative narrative — clearly labelled, not live data),
+  `helpers.js`, `ReducedStory.js` (2D accessible fallback). `Landing.js` now just renders `<Experience/>`.
+- 11 scenes: enter command center → request+shards → market discovery funnel (1247→10) → supplier
+  intelligence kiosks → verification beams → negotiation (AI vs supplier, price ₹900→₹875) → multi-vendor
+  war room → true landed-cost tower (assumptions tagged) → AI recommendation → human decision
+  (Approve/Negotiate/Reject) → mission complete + seal ring.
+- User choices honoured: scroll-driven; scripted demo on a state-driven architecture; persistent Skip/Sign-in;
+  reduced-motion fallback. Verified by testing agent (frontend 100%, zero console errors) + screenshots.

@@ -1,0 +1,28 @@
+{
+  "summary": "Frontend-only testing of the new scroll-driven 3D landing experience on '/'. Landing loads without JS/console errors, canvas renders, top nav (NegoBuy brand, Pricing, Sign in, Skip intro) all visible. All 11 scene overlays (data-testid story-scene-0 .. story-scene-10) present in DOM and each becomes visible at a distinct scroll fraction. Scene 9 buttons (approve/negotiate/reject) all navigate to /register. Scene 10 final-cta -> /register and story-pricing -> /pricing. skip-intro -> /register, nav-login -> /login. /login, /register, /pricing all load. Unknown route redirects to /. Zero console errors were logged during load and full scroll traversal (only React Router v7 future-flag warnings and a benign framer-motion static-position warning).",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "Landing scroll timing", "issues": ["Scene->scroll-fraction mapping is tighter than the review's rough fractions. At exact 50% and exact 90% scroll positions the overlays are between scenes and opacity is 0 momentarily. Observed mapping: scene0~0%, scene1~10%, scene2~20%, scene3~30%, scene4~40%, scene5~45%, scene6~55%, scene7~65%, scene8~75%, scene9~80%, scene10~90-100%. Not a functional bug — all scenes are reachable — but the last two scenes are compressed into the final 20% of scroll while ~10% (from ~90% to ~100%) shows scene 10 with no further movement. Consider distributing scene9 nearer ~85-90% for smoother pacing."]},
+      {"screen": "ProgressRail", "issues": ["The right-side rail is visible and its active index updates (verified '00 / 10' at top, '10 / 10' at bottom) plus subtitle changes from 'NEGOBUY // COMMAND CENTER' to 'MISSION COMPLETE'. However there is no data-testid='progress-rail' on the container — makes automated targeting harder. Add data-testid to rail root for testability."]}
+    ]
+  },
+  "test_report_links": [],
+  "action_items": [
+    "(Optional) Redistribute scene mapping so scene9 aligns closer to 90% scroll (current pacing puts scene10 visible from ~90% onwards).",
+    "(Optional) Add data-testid='progress-rail' (and per-index items) on the right rail container for robust automated verification."
+  ],
+  "critical_code_review_comments": [
+    "WebGL context loss log observed after multiple back-to-back SPA route hops in a single tab (THREE.WebGLRenderer: Context Lost.). Not a user-visible bug in a fresh session, but confirm the WebGL error boundary + reduced-motion fallback in Experience.js actually recovers rather than leaving a black canvas after prolonged navigation.",
+    "framer-motion warning: 'container has a non-static position, like relative/fixed/absolute'. The scroll container in Experience.js should have an explicit position style to silence and avoid subtle offset issues.",
+    "Overlays wrapper is pointer-events:none; per-button containers correctly opt back into pointer-events:auto — verified via successful clicks. Good."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "N/A", "frontend": "100%"},
+  "seed_data_creation": "None",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Landing '/' is a scripted no-backend experience. Body height ~9900px at 1920x900. Use window.scrollTo(0, document.body.scrollHeight*frac) with ~2.2s wait to observe scene opacity. Scene->frac mapping tight, use fractions 0.00, 0.10, 0.20, 0.30, 0.40, 0.45, 0.55, 0.65, 0.75, 0.80, 0.95 to hit scenes 0..10 respectively. All data-testids listed in the review verified present and functional. Progress rail lacks data-testid — target by text ('00 / 10') if needed."
+}
