@@ -23,6 +23,7 @@ from pydantic import BaseModel
 from db import get_db
 from auth import get_current_user
 import audit
+import ai_service
 
 log = logging.getLogger("exotel")
 router = APIRouter(prefix="/api/voice/exotel", tags=["exotel"])
@@ -329,6 +330,14 @@ async def session_start(request: Request):
                                   {"$set": {"call_sid": call_sid, "status": "connected"}})
     mission = await db.missions.find_one({"id": session["mission_id"]}, {"_id": 0}) or {}
     authority = session.get("authority") or _authority(mission)
+    vendor = await db.vendors.find_one({"id": session["vendor_id"]}, {"_id": 0}) or \
+        {"name": session.get("vendor_name")}
+    # The single shared negotiation brain, rendered for this mission/vendor (read-only authority).
+    constraints = {"max_price": authority.get("max_price_per_unit"),
+                   "target_price": authority.get("target_price_per_unit"),
+                   "max_delivery_days": authority.get("max_delivery_days"),
+                   "min_warranty": authority.get("min_warranty")}
+    agent_prompt = ai_service.build_agent_prompt(mission, vendor, constraints)
     # Only the dynamic info the agent needs. Authority is read-only context.
     return {
         "session_ref": session["session_ref"],
@@ -337,6 +346,7 @@ async def session_start(request: Request):
                     "delivery_location": mission.get("delivery_location"),
                     "deadline_days": mission.get("deadline_days")},
         "authority": authority,
+        "agent_prompt": agent_prompt,
         "questions": ["price per unit", "minimum order quantity", "lead time",
                       "warranty", "payment terms", "shipping terms"],
         "rules": ("Negotiate toward the target price and never exceed the maximum authorized "

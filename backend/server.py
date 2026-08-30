@@ -301,6 +301,10 @@ async def negotiate(mission_id: str, vendor_id: str, body: NegotiateBody,
 
     # Create/refresh an offer from the negotiated indicative terms.
     if final["price"]:
+        # Authority enforcement: never persist an offer above the authorized maximum.
+        within_authority = True
+        if max_price is not None and float(final["price"]) > float(max_price):
+            within_authority = False
         offer = {
             "id": uuid.uuid4().hex, "mission_id": mission_id, "vendor_id": vendor_id,
             "vendor_name": vendor["name"], "organization_id": user["organization_id"],
@@ -311,12 +315,21 @@ async def negotiate(mission_id: str, vendor_id: str, body: NegotiateBody,
             "warranty": final["warranty"], "payment_terms": None,
             "reliability_score": vendor.get("reliability_score"),
             "source": "ai_negotiation_preview", "simulation": True,
-            "status": "OPEN", "created_at": now_iso(),
+            "within_authority": within_authority,
+            "status": "OPEN" if within_authority else "OUT_OF_AUTHORITY",
+            "max_authorized_price": max_price, "created_at": now_iso(),
         }
-        await db.offers.delete_many({"mission_id": mission_id, "vendor_id": vendor_id})
+        # Only overwrite prior AI-preview offers — never wipe real email/voice offers.
+        await db.offers.delete_many({"mission_id": mission_id, "vendor_id": vendor_id,
+                                     "source": "ai_negotiation_preview"})
         await db.offers.insert_one(offer)
         await vendor_memory.record_outcome(user["organization_id"], vendor, mission_id,
                                             final["price"], source="negotiation_preview")
+        if not within_authority:
+            await orchestrator.log_action(
+                mission_id, "Negotiation Agent", "Offer exceeds authority",
+                f"[SIMULATION] Vendor held at {mission.get('currency')} {final['price']}/unit, "
+                f"above the authorized max {max_price}. Flagged OUT_OF_AUTHORITY; needs human review.")
     return negotiation
 
 

@@ -114,3 +114,11 @@ Verified by testing agent: backend 13/13, frontend modal 100%, zero bugs. ONE re
 - Added GET /api/voice/exotel/session/{session_ref} (auth, org-scoped) for UI polling; _normalize_number() -> E.164 (+91).
 - Frontend: components/ExotelCallModal.js — guided flow (mission+vendor context -> editable destination pre-filled 9008136500 -> explicit confirm -> place -> live status progress rail + duration/recording + read-only authority + "no offer/order created" note). MissionDetail: per-vendor Exotel button (data-testid exotel-call-{id}).
 - Safety re-verified: call never creates offer/order/purchase/approval; authority read-only from webhooks; secrets never exposed to frontend or logs.
+
+## Unified negotiation persona — June 2026 (session 6)
+Verified by testing agent (7/7 + 7/7, zero bugs).
+- ai_service.py: replaced terse NEGOTIATION_SYSTEM with the full canonical NegoBuy negotiation-agent persona (identity, objective, authority limits + MUST-NOTs, natural style, voice rules, strategy, price tactics, counteroffer extraction, no-commit, human approval). New build_agent_prompt(mission,vendor,constraints,...) renders it; used by ALL channels.
+- negotiation_turn now uses persona + JSON output contract; server-side clamp forces walk_away_price <= max authorized and sets within_authority=false when exceeded.
+- exotel_service.session_start now returns agent_prompt (the rendered persona) for the voice bot — no secrets leaked; authority read-only/frozen at call start.
+- WhatsApp inbound already routes through negotiation_turn → inherits the persona (shared brain).
+- server.negotiate hardening: persisted AI offer flagged status OPEN vs OUT_OF_AUTHORITY (+ within_authority, max_authorized_price); delete_many now source-scoped to 'ai_negotiation_preview' so real vendor_email/manual offers are never wiped. (apply-offer intentionally supersedes preview for that vendor.)

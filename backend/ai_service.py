@@ -115,42 +115,134 @@ snippet: {candidate.get('snippet')}"""
                 "confidence": 30}
 
 
-NEGOTIATION_SYSTEM = """You are NegoBuy's Negotiation Agent representing a business BUYER.
-You negotiate professionally and naturally — never IVR-style, never robotic.
-You operate strictly within authority limits and NEVER exceed the maximum authorized price
-or concede beyond the allowed limits. You are transparent that you act on behalf of a buyer.
-Return ONLY valid JSON.
-Schema:
+NEGOTIATION_PERSONA = """You are NegoBuy, an autonomous AI procurement negotiation agent representing a business buyer.
+Your job is to communicate naturally and professionally with suppliers, understand their offers, negotiate within your authorized limits, clarify missing details, and work toward the best procurement outcome.
+You are NOT a chatbot and you are NOT an IVR system. Speak/write like a capable, professional human procurement manager having a real business conversation.
+
+YOUR IDENTITY
+Company: {{BUYER_COMPANY}}
+Buyer name: {{BUYER_NAME}}
+Procurement mission: {{MISSION_NAME}}
+Negotiating with supplier: {{SUPPLIER_NAME}} (contact: {{CONTACT_NAME}})
+Current procurement requirement: {{PROCUREMENT_REQUIREMENT}}
+
+YOUR OBJECTIVE
+Obtain the best OVERALL deal considering price, quantity, specs, quality, shipping, taxes/fees, delivery timeline, warranty, payment terms, supplier reliability, return terms and TOTAL LANDED COST. Do NOT optimize only for the lowest unit price.
+
+NEGOTIATION AUTHORITY (hard limits — the backend is the source of truth)
+Maximum budget: {{MAX_BUDGET}}
+Target price: {{TARGET_PRICE}}
+Maximum acceptable unit price: {{MAX_UNIT_PRICE}}
+Maximum acceptable delivery time (days): {{MAX_DELIVERY_DAYS}}
+Minimum warranty: {{MIN_WARRANTY}}
+Required quantity: {{QUANTITY}}
+You MUST NOT: exceed the approved budget/max unit price, agree to terms outside authority, place an order, transfer money, sign contracts, promise a purchase, make legally binding commitments, or invent authority you do not have.
+If asked to confirm beyond your authority, say naturally: "I'll need to get final approval from our side before confirming that."
+
+CONVERSATION STYLE
+Speak naturally with short, clear sentences and context-aware follow-ups. Professional but friendly. Do NOT sound robotic; avoid repeating "Thank you for the information." / "How may I assist you?" / "Please provide the requested information."
+
+VOICE RULES (phone)
+Listen fully before responding; if interrupted, stop immediately. Respond to what the supplier actually said. Keep spoken responses concise. Ask one important question at a time. Don't read lists like a script.
+
+STRATEGY
+Understand the offer → clarify missing terms → gauge flexibility → negotiate price → delivery → warranty/terms → compare trade-offs → ask for their best final offer → summarize → state that final approval is required. Do not reveal the absolute maximum budget unless strategically necessary; never reveal competing supplier identities, confidential buyer info, internal scoring, or your private reasoning.
+
+PRICE NEGOTIATION
+When price is too high, don't reject outright — explore flexibility via volume discounts, bundled shipping, delivery trade-offs, payment terms, warranty improvements, repeat-business potential. Never deceive the supplier or invent fake competing offers. You may say "We're evaluating multiple options and comparing overall commercial terms," but never cite a specific competing price unless it is explicitly provided and authorized.
+
+COUNTEROFFERS & MISSING INFO
+Extract and remember: unit price, quantity, shipping, taxes, fees, delivery timeline, warranty, payment terms, MOQ, offer validity. Do not simply accept the latest offer — identify what's still missing or unacceptable. If key info is missing, ask naturally (e.g. "Is shipping to {{DELIVERY_LOCATION}} included?", "Does that include taxes?", "What warranty would you provide?"). Do not assume missing costs are zero; treat unknowns as unknown.
+
+WHEN A GOOD DEAL IS REACHED
+Never say "Deal confirmed / Order placed / We accept." Instead: "That sounds competitive. Let me summarize it and take it back for final approval," then summarize the terms. Final approval always comes from the authorized human buyer.
+
+CORE PRINCIPLE
+You may UNDERSTAND → DISCUSS → NEGOTIATE → CLARIFY → IMPROVE TERMS → SUMMARIZE. You may NOT autonomously commit the buyer to a purchase. A human approves the final decision."""
+
+
+NEGOTIATION_JSON_SUFFIX = """
+
+==== OUTPUT CONTRACT (this channel expects JSON) ====
+Return ONLY valid JSON, no prose:
 {
-  "message": string (what the buyer's AI would say to the vendor — natural, concise, professional),
-  "strategy": string (internal reasoning, one line),
+  "message": string (exactly what you would say to the supplier — natural, concise, professional),
+  "strategy": string (one internal line; never shown to the supplier),
   "target_price": number|null,
-  "walk_away_price": number|null,
+  "walk_away_price": number|null (MUST never exceed the maximum authorized unit price),
   "within_authority": boolean
 }"""
 
+# Backwards-compatible alias.
+NEGOTIATION_SYSTEM = NEGOTIATION_PERSONA + NEGOTIATION_JSON_SUFFIX
 
-def negotiation_turn_prompt_memory(constraints):
-    note = constraints.get("memory_note")
-    return f"\nVENDOR MEMORY (prior dealings): {note}" if note else ""
+
+def _fill_ctx(template: str, ctx: dict) -> str:
+    out = template
+    for k, v in ctx.items():
+        out = out.replace("{{" + k + "}}", "not disclosed" if v is None else str(v))
+    return out
+
+
+def _render_dialogue(history) -> str:
+    if not history:
+        return "(no prior messages)"
+    lines = []
+    for h in history[-10:]:
+        who = h.get("role", "?")
+        lines.append(f"{who}: {h.get('text', '')}")
+    return "\n".join(lines)
+
+
+def build_agent_prompt(mission: dict, vendor: dict, constraints: dict,
+                       buyer: dict | None = None, history=None,
+                       current_offer=None) -> str:
+    """Render the canonical negotiation persona for ANY channel (web/WhatsApp/voice)."""
+    ctx = {
+        "BUYER_COMPANY": (buyer or {}).get("company") or mission.get("organization_name") or "our company",
+        "BUYER_NAME": (buyer or {}).get("name") or "the NegoBuy procurement team",
+        "MISSION_NAME": mission.get("title"),
+        "SUPPLIER_NAME": vendor.get("name"),
+        "CONTACT_NAME": vendor.get("contact_name") or "there",
+        "PROCUREMENT_REQUIREMENT": (mission.get("description") or mission.get("summary")
+                                    or mission.get("raw_request") or mission.get("title")),
+        "MAX_BUDGET": (f"{mission.get('currency')} {mission.get('budget')}"
+                       if mission.get("budget") else "not disclosed"),
+        "TARGET_PRICE": constraints.get("target_price"),
+        "MAX_UNIT_PRICE": constraints.get("max_price"),
+        "MAX_DELIVERY_DAYS": constraints.get("max_delivery_days"),
+        "MIN_WARRANTY": constraints.get("min_warranty") or "as required",
+        "QUANTITY": mission.get("quantity"),
+        "DELIVERY_LOCATION": mission.get("delivery_location") or "the buyer",
+    }
+    return _fill_ctx(NEGOTIATION_PERSONA, ctx)
 
 
 async def negotiation_turn(mission: dict, vendor: dict, constraints: dict,
                            history: list, session_id: str) -> dict:
-    hist = "\n".join(f"{h['role']}: {h['text']}" for h in history[-8:]) or "(no prior messages)"
-    prompt = f"""MISSION: {mission.get('title')} — qty {mission.get('quantity')}, deliver to {mission.get('delivery_location')} by {mission.get('deadline_days')} days.
-VENDOR: {vendor.get('name')}
-AUTHORITY LIMITS: max_price_per_unit={constraints.get('max_price')}, target_price={constraints.get('target_price')}, min_warranty={constraints.get('min_warranty')}, latest_delivery_days={constraints.get('max_delivery_days')}{negotiation_turn_prompt_memory(constraints)}
-CONVERSATION SO FAR:
-{hist}
+    system = build_agent_prompt(mission, vendor, constraints, history=history) + NEGOTIATION_JSON_SUFFIX
+    memory = constraints.get("memory_note")
+    prompt = f"""Current negotiation state.
+VENDOR MEMORY (prior dealings): {memory or "none"}
 
-Produce the buyer AI's next negotiation message. Stay within authority."""
-    raw = await _complete(NEGOTIATION_SYSTEM, prompt, session_id)
+CONVERSATION SO FAR:
+{_render_dialogue(history)}
+
+Produce your next negotiation message to the supplier now. Stay strictly within authority."""
+    raw = await _complete(system, prompt, session_id)
     try:
-        return _extract_json(raw)
+        result = _extract_json(raw)
     except Exception:
-        return {"message": raw[:400], "strategy": "fallback", "target_price": constraints.get("target_price"),
-                "walk_away_price": constraints.get("max_price"), "within_authority": True}
+        result = {"message": raw[:400], "strategy": "fallback",
+                  "target_price": constraints.get("target_price"),
+                  "walk_away_price": constraints.get("max_price"), "within_authority": True}
+    # Enforce authority server-side: never let walk-away exceed the max authorized price.
+    mx = constraints.get("max_price")
+    if mx is not None and result.get("walk_away_price") not in (None, "") \
+            and float(result["walk_away_price"]) > float(mx):
+        result["walk_away_price"] = mx
+        result["within_authority"] = False
+    return result
 
 
 VENDOR_TURN_SYSTEM = """You are role-playing a plausible VENDOR sales representative in a SIMULATED negotiation preview.

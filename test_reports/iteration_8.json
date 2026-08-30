@@ -1,0 +1,24 @@
+{
+  "summary": "Authority-guard + real-offer preservation — Backend 7/7 PASSED in 29.88s. Admin logged in (admin@negobuy.ai), created mission 'Authority Guard Chairs' (qty=500, budget=450000 INR → max_authorized_unit=900), discovery returned a vendor within 75s. (1) POST /api/missions/{id}/vendors/{vid}/negotiate {rounds:2} → 200; GET /api/missions/{id}/offers contains an ai_negotiation_preview offer for this vendor with fields within_authority (bool), status, and max_authorized_price==900. In this run the simulated vendor settled <=900 → within_authority=true and status='OPEN' (as expected per agent-to-agent note; forcing OUT_OF_AUTHORITY is non-deterministic and acceptable to skip). (2) POST /api/missions/{id}/vendors/{vid}/outreach/apply-offer {price_per_unit:820, lead_time_days:12} created a source='vendor_email', simulation=false offer. Re-running POST negotiate {rounds:1} kept the SAME vendor_email offer (same id, negotiated_price=820) — server.negotiate's delete_many is correctly filtered by source='ai_negotiation_preview' and does not wipe real offers. (3) No auto-commit: mission status stayed pre-approval (not APPROVED/COMPLETED); no purchase auto-created for this mission at /api/missions/{id}/purchases or /api/purchases. (4) Regression: /api/system/status 200, /api/dashboard/analytics 200, /api/vendors/memory 200. Test mission cleaned up in teardown.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/test_authority_guard.py",
+    "/app/test_reports/pytest/authority_guard.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "server.negotiate (lines 302-333): authority hardening looks correct — within_authority flag, status OPEN/OUT_OF_AUTHORITY, max_authorized_price persisted; delete_many is source-filtered to 'ai_negotiation_preview' only, so vendor_email/manual real offers are preserved across re-negotiations. Verified via test.",
+    "outreach.apply_offer (line 166) still does an UNFILTERED db.offers.delete_many({mission_id, vendor_id}) — meaning applying a real email offer will wipe any existing ai_negotiation_preview for that vendor. That is likely desired ('real supersedes preview'), but note the asymmetry: negotiate is source-scoped, apply-offer is not. Consider documenting this precedence rule.",
+    "Forcing status='OUT_OF_AUTHORITY' is non-deterministic under the current simulated vendor (it counters below 900). If deterministic coverage is desired, expose a test-only knob to seed a stubborn vendor floor, or unit-test the persistence branch directly in ai_service/server without going through discovery.",
+    "GET /api/missions/{id}/offers returns both ai_negotiation_preview (simulation=true) and vendor_email (simulation=false) offers side-by-side; downstream comparison/PO flows should always filter by simulation=false or explicit source to avoid picking a preview by mistake."
+  ],
+  "updated_files": ["/app/backend/tests/test_authority_guard.py"],
+  "success_rate": {"backend": "100% (7/7)", "frontend": "n/a — backend only"},
+  "test_credentials": "admin@negobuy.ai / NegoBuy@2026 — working.",
+  "seed_data_creation": "Module-scoped: one 'Authority Guard Chairs' mission (qty=500, budget=450000 INR) + one discovered vendor + one vendor_email offer (price 820) + one ai_negotiation_preview offer. All deleted at fixture teardown.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Authority guard is enforced at server.negotiate: offers carry within_authority/status/max_authorized_price. Real offers (source=vendor_email/manual) survive re-negotiate — verified. Discovery still flaky (~75s poll). Free-plan cap=3 active missions — test suite cleans 'Authority Guard'/'Persona Test'/'TEST_' missions on setup. New regression file: /app/backend/tests/test_authority_guard.py (7 tests, 30s).",
+  "rca of the issue": "No issue — all assertions pass. Implementation correctly (a) tags AI-preview offer with authority fields and (b) scopes delete_many by source='ai_negotiation_preview' so real vendor_email offers persist across re-runs."
+}
