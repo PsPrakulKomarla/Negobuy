@@ -42,8 +42,8 @@ def _norm_in_mobile(raw: str):
 
 # Preferred default vendors that MUST be contacted for certain categories (demo/seed data).
 DEFAULT_TILE_VENDORS = [
-    {"name": "SLV Ceramics (Muddinapalya)", "phone": "+919980402205",
-     "location": "Muddinapalya, Bengaluru", "url": None,
+    {"name": "SLV Ceramics", "phone": "+919945842205",
+     "location": "Bengaluru", "url": None,
      "note": "Preferred tiles vendor (always contacted for tile requirements)."},
     {"name": "Ananta Ceramics", "phone": "+919945842205",
      "location": "Bengaluru", "url": None,
@@ -61,7 +61,8 @@ def _default_vendors(material: str) -> list:
     vendors = []
     if _is_tiles(material):
         for dv in DEFAULT_TILE_VENDORS:
-            vendors.append({**dv, "default": True, "telegram_reachable": None,
+            vendors.append({**dv, "id": uuid.uuid4().hex, "default": True,
+                            "telegram_reachable": None,
                             "telegram_user_id": None, "telegram_name": None,
                             "deal_id": None, "status": "FOUND"})
     return vendors
@@ -114,19 +115,23 @@ async def discover(body: DiscoverBody, user: dict = Depends(get_current_user)):
                 hits.append(h)
         except Exception:
             log.exception("web_search failed q=%s", q)
-    if not hits:
+
+    defaults = _default_vendors(body.material)
+    if not hits and not defaults:
         raise HTTPException(status_code=502, detail="Web search returned no results. Try again.")
 
     # 2) AI extracts clean vendor candidates + mobile numbers (no fabrication).
-    session = f"sourcing-{uuid.uuid4().hex[:8]}"
-    raw_vendors = await ai_service.extract_vendors(body.material, body.location, hits, session)
-    # Fallback if the AI provider is unavailable/rate-limited: use phones already scraped from hits.
-    if not raw_vendors:
-        raw_vendors = _vendors_from_hits(hits)
+    raw_vendors = []
+    if hits:
+        session = f"sourcing-{uuid.uuid4().hex[:8]}"
+        raw_vendors = await ai_service.extract_vendors(body.material, body.location, hits, session)
+        # Fallback if the AI provider is unavailable/rate-limited: use phones scraped from hits.
+        if not raw_vendors:
+            raw_vendors = _vendors_from_hits(hits)
 
-    # 3) Normalize + dedup phones. Tiles requests always include a preferred default vendor.
+    # 3) Normalize + dedup phones. Tiles requests always include the preferred default vendors.
     candidates, phones_seen = [], set()
-    for dv in _default_vendors(body.material):
+    for dv in defaults:
         candidates.append(dv)
         phones_seen.add(dv["phone"])
     for v in raw_vendors:
@@ -135,6 +140,7 @@ async def discover(body: DiscoverBody, user: dict = Depends(get_current_user)):
             continue
         phones_seen.add(e164)
         candidates.append({
+            "id": uuid.uuid4().hex,
             "name": (v.get("name") or "Vendor").strip()[:80],
             "phone": e164,
             "location": v.get("location"),
@@ -193,6 +199,10 @@ async def launch(campaign_id: str, body: LaunchBody, user: dict = Depends(get_cu
     pick = set(body.phones or [])
     launched, skipped = [], []
     candidates = camp["candidates"]
+    # Never message the same Telegram contact twice (e.g. two default shops sharing a number)
+    # — a second opener into the same chat would corrupt the negotiation thread.
+    contacted_users = {c.get("telegram_user_id") for c in candidates
+                       if c.get("deal_id") and c.get("telegram_user_id")}
     for c in candidates:
         if pick and c["phone"] not in pick:
             continue
@@ -201,6 +211,12 @@ async def launch(campaign_id: str, body: LaunchBody, user: dict = Depends(get_cu
             continue
         if c.get("deal_id"):
             continue  # already launched
+        uid = c.get("telegram_user_id")
+        if uid in contacted_users:
+            c["status"] = "SKIPPED_DUPLICATE"
+            skipped.append({"phone": c["phone"], "name": c.get("name"),
+                            "reason": "same Telegram contact already being negotiated"})
+            continue
         try:
             entity = await client.get_entity(c["telegram_user_id"])
             deal = await tg.start_deal_internal(
@@ -213,6 +229,7 @@ async def launch(campaign_id: str, body: LaunchBody, user: dict = Depends(get_cu
                 source=f"sourcing:{campaign_id}")
             c["deal_id"] = deal["id"]
             c["status"] = "NEGOTIATING"
+            contacted_users.add(uid)
             launched.append({"phone": c["phone"], "name": c["name"], "deal_id": deal["id"]})
         except Exception:
             log.exception("launch failed phone=%s", c["phone"])

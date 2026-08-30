@@ -182,7 +182,7 @@ function CampaignView({ campaignId, onBack }) {
               const ordered = c.deal_status === "ORDER_PLACED";
               const canAccept = c.deal_id && !ordered;
               return (
-                <div key={c.phone} data-testid={`src-rank-${i}`}
+                <div key={c.id || c.phone} data-testid={`src-rank-${i}`}
                   className={`flex items-center justify-between gap-3 rounded-xl px-4 py-2.5 border ${winner ? "border-secondary/40 bg-secondary/10" : "border-white/10 bg-white/5"}`}>
                   <div className="flex items-center gap-3 min-w-0">
                     <span className={`w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold ${winner ? "bg-secondary/25 text-secondary" : "bg-white/10 text-white/50"}`}>{i + 1}</span>
@@ -194,7 +194,7 @@ function CampaignView({ campaignId, onBack }) {
                     <span className={`text-sm font-bold ${winner ? "text-secondary" : "text-yellow-300"}`}>{camp.currency} {c.q}</span>
                     {canAccept && (
                       <Button size="sm" variant={winner ? "primary" : "secondary"}
-                        onClick={() => setConfirmC(c)} data-testid={`src-accept-${c.phone}`}>
+                        onClick={() => setConfirmC(c)} data-testid={`src-accept-${c.id || c.phone}`}>
                         <CheckCircle2 size={14} /> Accept
                       </Button>
                     )}
@@ -250,7 +250,7 @@ function CampaignView({ campaignId, onBack }) {
             {launching ? <Spinner /> : <Send size={15} />} Negotiate all {reachable.length} reachable
           </Button>
           <Button variant="secondary" disabled={launching || !Object.values(selected).some(Boolean)}
-            onClick={() => launch(Object.keys(selected).filter((p) => selected[p]))} data-testid="src-launch-selected">
+            onClick={() => launch(camp.candidates.filter((c) => selected[c.id]).map((c) => c.phone))} data-testid="src-launch-selected">
             Negotiate selected
           </Button>
         </div>
@@ -261,12 +261,12 @@ function CampaignView({ campaignId, onBack }) {
           <Card className="p-8 text-center text-white/50">No vendors with usable mobile numbers were found. Try different keywords or a city.</Card>
         )}
         {camp.candidates.map((c) => (
-          <Card key={c.phone} className="p-4 border border-white/10" data-testid={`src-vendor-${c.phone}`}>
+          <Card key={c.id || c.phone} className="p-4 border border-white/10" data-testid={`src-vendor-${c.id || c.phone}`}>
             <div className="flex items-start justify-between gap-3">
               <div className="flex items-start gap-3 min-w-0">
                 {camp.telegram_linked && !c.deal_id && c.telegram_reachable && (
-                  <input type="checkbox" checked={!!selected[c.phone]} onChange={() => toggle(c.phone)}
-                    className="mt-1 accent-cyan-400" data-testid={`src-check-${c.phone}`} />
+                  <input type="checkbox" checked={!!selected[c.id]} onChange={() => toggle(c.id)}
+                    className="mt-1 accent-cyan-400" data-testid={`src-check-${c.id || c.phone}`} />
                 )}
                 <div className="min-w-0">
                   <div className="flex items-center gap-2 flex-wrap">
@@ -291,15 +291,15 @@ function CampaignView({ campaignId, onBack }) {
                   </>
                 )}
                 {c.deal_id && (
-                  <button onClick={() => setOpenDeal(openDeal === c.phone ? null : c.phone)}
-                    className="text-xs text-primary/80 hover:text-primary mt-1" data-testid={`src-view-${c.phone}`}>
-                    {openDeal === c.phone ? "hide chat" : "view chat"}
+                  <button onClick={() => setOpenDeal(openDeal === c.id ? null : c.id)}
+                    className="text-xs text-primary/80 hover:text-primary mt-1" data-testid={`src-view-${c.id || c.phone}`}>
+                    {openDeal === c.id ? "hide chat" : "view chat"}
                   </button>
                 )}
               </div>
             </div>
 
-            {openDeal === c.phone && c.transcript && (
+            {openDeal === c.id && c.transcript && (
               <div className="mt-3 pt-3 border-t hairline space-y-2 max-h-64 overflow-y-auto">
                 {c.transcript.map((m, i) => (
                   <div key={i} className={`flex gap-2 ${m.role === "ai" ? "justify-end" : "justify-start"}`}>

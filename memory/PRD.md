@@ -159,3 +159,17 @@ REACT_APP_BACKEND_URL at start).
 - Env note: fresh checkout had NO .env files and was crashing (missing pyaes). Reconstructed
   backend/.env + frontend/.env, installed pyaes==1.6.1.
 - Tested: iteration_16 (9/9 backend + frontend E2E, 100%). Legacy Stripe stubs left in billing.py (unused).
+
+## Implemented (2026-08-30) — Default tile vendors + hardened auto-sourcing
+- auto_sourcing.py DEFAULT_TILE_VENDORS now: SLV Ceramics & Ananta Ceramics, BOTH phone
+  +919945842205 (per user). Each discovery candidate gets a unique `id`.
+- Tile/ceramic/vitrified/kajaria searches ALWAYS inject both defaults (even if web search
+  returns nothing — no 502 when defaults exist); non-tile searches do not.
+- launch() dedups by telegram_user_id: the same Telegram contact is never messaged twice
+  (2nd default -> SKIPPED_DUPLICATE) — prevents thread corruption / AI double-replies.
+- AutoSourcing.js keys candidates/leaderboard/selected/openDeal by candidate id (c.id||c.phone)
+  so two same-number cards render without duplicate React keys. Live chat + Final Comparison
+  (reverse auction) + accept-order flow unchanged and intact.
+- NOTE: live Telegram negotiation requires the org to LINK its Telegram userbot account in the
+  "Telegram AI" tab (api_id/api_hash/phone + OTP). Until linked, vendors show but cannot be messaged.
+- Tested: iteration_18 (14/14 backend + frontend E2E). Removed stale iteration_15 default test.

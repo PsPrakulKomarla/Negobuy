@@ -132,3 +132,4 @@ yarl==1.24.5
 zipp==4.1.0
 telethon==1.44.0
 pyaes==1.6.1
+reportlab==5.0.1
