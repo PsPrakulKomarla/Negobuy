@@ -27,6 +27,9 @@ import audit
 from payments import router as payments_router, webhook_router as razorpay_webhook_router
 from telephony import router as telephony_router
 from exotel_service import router as exotel_router, live_status as exotel_live_status
+from negotiation_engine import router as negotiation_engine_router
+from assurance import router as assurance_router
+from mission_orchestrator import router as orchestrator_router
 from landed_cost import compute_landed_cost
 
 app = FastAPI(title="NegoBuy API")
@@ -599,6 +602,9 @@ app.include_router(payments_router)
 app.include_router(razorpay_webhook_router)
 app.include_router(telephony_router)
 app.include_router(exotel_router)
+app.include_router(negotiation_engine_router)
+app.include_router(assurance_router)
+app.include_router(orchestrator_router)
 
 
 @app.on_event("startup")

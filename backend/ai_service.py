@@ -35,28 +35,38 @@ def _extract_json(text: str):
     return json.loads(text)
 
 
-REQUIREMENT_SYSTEM = """You are NegoBuy's Requirement Agent, an expert B2B procurement analyst.
-Extract structured procurement requirements from a buyer's natural-language request.
-Return ONLY valid JSON, no prose. Never invent facts the buyer did not state — use null for unknowns.
+REQUIREMENT_SYSTEM = """You are NegoBuy's Requirement Intelligence Agent, the first layer of the procurement lifecycle.
+Convert a buyer's natural-language request into a clear, structured procurement requirement.
+Return ONLY valid JSON, no prose. Never invent facts — use null/UNKNOWN for what the buyer did not state.
+Distinguish MANDATORY vs PREFERRED requirements; never silently turn a preference into a hard requirement.
+Never assume a maximum budget. Mark inferred context as an assumption; never hide assumptions.
 Schema:
 {
   "title": string (short mission title),
   "category": string,
+  "product": string|null,
+  "description": string|null,
   "quantity": number|null,
   "unit": string|null,
   "budget": number|null,
-  "currency": string (ISO like INR, USD; infer from symbols, default null),
+  "budget_status": "CONFIRMED"|"ESTIMATED"|"UNKNOWN",
+  "currency": string (ISO like INR, USD; infer from symbols, else null),
   "delivery_location": string|null,
   "deadline_days": number|null,
   "required_delivery_date": string|null,
+  "delivery_priority": "HIGH"|"MEDIUM"|"LOW"|null,
   "specifications": [string],
   "quality_requirements": [string],
   "warranty_requirements": string|null,
   "payment_requirements": string|null,
+  "mandatory_requirements": [string],
+  "preferred_requirements": [string],
+  "assumptions": [string],
   "missing_info": [string]  (critical fields still needed to begin discovery),
-  "clarifying_questions": [string] (only if truly needed; empty if enough to start),
+  "clarifying_questions": [string] (ask only the MOST important first; empty if enough to start),
   "ready_for_discovery": boolean,
-  "summary": string (one concise sentence)
+  "discovery_status": "READY_FOR_DISCOVERY"|"READY_WITH_ASSUMPTIONS"|"NEEDS_CLARIFICATION",
+  "summary": string (one concise plain-language sentence)
 }"""
 
 
@@ -64,12 +74,24 @@ async def extract_requirement(text: str, session_id: str) -> dict:
     raw = await _complete(REQUIREMENT_SYSTEM,
                           f"Buyer request:\n\"\"\"{text}\"\"\"", session_id)
     try:
-        return _extract_json(raw)
+        result = _extract_json(raw)
+        result.setdefault("budget_status",
+                          "ESTIMATED" if result.get("budget") else "UNKNOWN")
+        result.setdefault("discovery_status",
+                          "READY_FOR_DISCOVERY" if result.get("ready_for_discovery")
+                          else "NEEDS_CLARIFICATION")
+        result.setdefault("mandatory_requirements", [])
+        result.setdefault("preferred_requirements", [])
+        result.setdefault("assumptions", [])
+        return result
     except Exception:
         return {"title": text[:60], "category": None, "quantity": None, "budget": None,
-                "currency": None, "delivery_location": None, "deadline_days": None,
-                "specifications": [], "missing_info": ["Could not parse — please refine"],
+                "budget_status": "UNKNOWN", "currency": None, "delivery_location": None,
+                "deadline_days": None, "specifications": [], "mandatory_requirements": [],
+                "preferred_requirements": [], "assumptions": [],
+                "missing_info": ["Could not parse — please refine"],
                 "clarifying_questions": [], "ready_for_discovery": False,
+                "discovery_status": "NEEDS_CLARIFICATION",
                 "summary": text[:120], "raw": raw}
 
 
@@ -245,6 +267,74 @@ Produce your next negotiation message to the supplier now. Stay strictly within 
     return result
 
 
+NEGOTIATION_STATES = [
+    "INITIATE", "INTRODUCTION", "UNDERSTAND_REQUIREMENT", "INITIAL_OFFER",
+    "COLLECT_TERMS", "EVALUATE_OFFER", "NEGOTIATE", "COUNTEROFFER", "CLARIFY_TERMS",
+    "FINAL_OFFER", "SUMMARIZE", "AWAITING_HUMAN_APPROVAL",
+    "APPROVED", "REJECTED", "NEGOTIATE_FURTHER",
+]
+NEGOTIATION_ACTIONS = [
+    "ASK_QUESTION", "COUNTEROFFER", "NEGOTIATE_DELIVERY", "NEGOTIATE_WARRANTY",
+    "NEGOTIATE_PAYMENT_TERMS", "REQUEST_FINAL_OFFER", "SUMMARIZE",
+    "END_CONVERSATION", "ESCALATE_TO_HUMAN",
+]
+
+ENGINE_CONTRACT = """
+
+==== NEGOTIATION ENGINE CONTRACT ====
+You are running one turn of a stateful negotiation. Read the LATEST supplier message plus the
+running state, then reply naturally AND report structured data. Extract only what the supplier
+actually said — use null for anything unknown; never invent prices, terms or competitor offers.
+
+Return ONLY valid JSON:
+{
+  "reply": string (your natural, concise message to the supplier for THIS channel — 1-3 sentences, human, no lists read aloud),
+  "extracted": {
+    "unit_price": number|null, "quantity": number|null, "total_price": number|null,
+    "shipping_included": boolean|null, "shipping_cost": number|null,
+    "taxes": string|null, "fees": string|null, "delivery_days": number|null,
+    "warranty": string|null, "payment_terms": string|null, "moq": number|null,
+    "availability": string|null, "validity": string|null, "return_terms": string|null
+  },
+  "next_action": one of [ASK_QUESTION, COUNTEROFFER, NEGOTIATE_DELIVERY, NEGOTIATE_WARRANTY, NEGOTIATE_PAYMENT_TERMS, REQUEST_FINAL_OFFER, SUMMARIZE, END_CONVERSATION, ESCALATE_TO_HUMAN],
+  "new_state": one of [INITIATE, INTRODUCTION, UNDERSTAND_REQUIREMENT, INITIAL_OFFER, COLLECT_TERMS, EVALUATE_OFFER, NEGOTIATE, COUNTEROFFER, CLARIFY_TERMS, FINAL_OFFER, SUMMARIZE, AWAITING_HUMAN_APPROVAL],
+  "missing_info": [string],
+  "decision_summary": string (short, plain-English status for the buyer's dashboard — e.g. "Price improved 8% to 875; delivery 8 days within target; shipping included; warranty still unknown." NO private chain-of-thought),
+  "needs_human_approval": boolean (true only when terms look final and you moved to SUMMARIZE/AWAITING_HUMAN_APPROVAL)
+}
+Rules: if the price is at/under the authorized maximum AND key terms are known, move toward SUMMARIZE and set needs_human_approval true (but never say the deal is confirmed). If price is above the maximum, keep negotiating or ESCALATE_TO_HUMAN — never accept it. Do not ask again for info already known in the offer state."""
+
+
+async def engine_turn(mission: dict, vendor: dict, constraints: dict, state: str,
+                      current_offer: dict, history: list, supplier_message: str,
+                      session_id: str) -> dict:
+    system = build_agent_prompt(mission, vendor, constraints, history=history) + ENGINE_CONTRACT
+    prompt = f"""CURRENT NEGOTIATION STATE: {state}
+AUTHORITY: max_unit_price={constraints.get('max_price')}, target={constraints.get('target_price')}, latest_delivery_days={constraints.get('max_delivery_days')}, min_warranty={constraints.get('min_warranty')}, quantity={mission.get('quantity')}
+KNOWN OFFER SO FAR (do not re-ask these): {json.dumps(current_offer or {}, default=str)}
+VENDOR MEMORY: {constraints.get('memory_note') or 'none'}
+
+RECENT CONVERSATION:
+{_render_dialogue(history)}
+
+LATEST SUPPLIER MESSAGE:
+"{supplier_message}"
+
+Run one negotiation turn now."""
+    raw = await _complete(system, prompt, session_id)
+    try:
+        result = _extract_json(raw)
+    except Exception:
+        result = {"reply": raw[:400], "extracted": {}, "next_action": "ASK_QUESTION",
+                  "new_state": state or "NEGOTIATE", "missing_info": [],
+                  "decision_summary": "Continuing the conversation.", "needs_human_approval": False}
+    if result.get("new_state") not in NEGOTIATION_STATES:
+        result["new_state"] = state or "NEGOTIATE"
+    if result.get("next_action") not in NEGOTIATION_ACTIONS:
+        result["next_action"] = "ASK_QUESTION"
+    return result
+
+
 VENDOR_TURN_SYSTEM = """You are role-playing a plausible VENDOR sales representative in a SIMULATED negotiation preview.
 This is clearly a simulation for demonstration — you are NOT a real company.
 Respond naturally to the buyer's AI: give a plausible price, discuss delivery, warranty, terms,
@@ -275,17 +365,32 @@ Give the vendor's next reply (simulation)."""
                 "warranty": None, "willing_to_continue": True}
 
 
-RECOMMEND_SYSTEM = """You are NegoBuy's Comparison & Recommendation Agent.
-Given several vendor offers with landed costs, recommend the best overall option.
-Do NOT simply pick the cheapest — weigh landed cost, delivery, warranty, reliability and risk.
-Return ONLY valid JSON.
-Schema:
+RECOMMEND_SYSTEM = """You are NegoBuy's Procurement Analysis & Recommendation Agent — a decision-intelligence
+agent, NOT a cheapest-price finder. Analyze verified supplier offers against the mission requirement and
+recommend the best OVERALL option, but NEVER auto-select — the human approves the final supplier.
+Weigh cost, true landed cost, specification match, delivery vs requirement, warranty, payment terms,
+supplier reliability/verification and risk. Never fabricate costs; treat unknowns as UNKNOWN (not zero).
+Do not hide a better trade-off. Do not recommend an offer that fails an essential requirement without
+clearly flagging it. Return ONLY valid JSON with BOTH the legacy keys and the rich analysis:
 {
   "recommended_offer_id": string,
   "recommendation_score": number 0-100,
-  "reasoning": string (2-3 sentences explaining WHY, referencing tradeoffs),
+  "reasoning": string (2-3 evidence-based sentences, no chain-of-thought),
   "risks": [string],
-  "ranking": [ {"offer_id": string, "score": number, "note": string} ]
+  "ranking": [ {"offer_id": string, "score": number, "note": string} ],
+  "recommendation": { "supplier_id": string, "status": "RECOMMENDED"|"STRONG_ALTERNATIVE"|"CONDITIONAL_OPTION"|"NOT_RECOMMENDED"|"INSUFFICIENT_INFORMATION", "confidence": "HIGH"|"MEDIUM"|"LOW" },
+  "advantages": [string],
+  "tradeoffs": [string],
+  "unknowns": [string],
+  "alternatives": [ {"offer_id": string, "why": string} ],
+  "recommended_next_step": string,
+  "normalized": [ {
+     "offer_id": string, "supplier": string,
+     "landed_cost": number|null, "landed_cost_status": "CONFIRMED"|"ESTIMATED"|"UNKNOWN",
+     "spec_match": "FULL_MATCH"|"PARTIAL_MATCH"|"MISMATCH"|"UNKNOWN",
+     "delivery": "MEETS"|"EXCEEDS"|"MISSES"|"UNKNOWN",
+     "warranty_ok": boolean|null
+  } ]
 }"""
 
 
@@ -293,17 +398,33 @@ async def recommend(mission: dict, offers: list, session_id: str) -> dict:
     offers_desc = json.dumps([{
         "offer_id": o["id"], "vendor": o.get("vendor_name"),
         "negotiated_price": o.get("negotiated_price"), "total_landed_cost": o.get("total_cost"),
+        "taxes": o.get("taxes"), "shipping": o.get("shipping"), "fees": o.get("fees"),
         "delivery_time": o.get("delivery_time"), "warranty": o.get("warranty"),
-        "reliability": o.get("reliability_score"),
-    } for o in offers], indent=2)
-    prompt = f"MISSION: {mission.get('title')}, budget {mission.get('budget')} {mission.get('currency')}\nOFFERS:\n{offers_desc}"
+        "payment_terms": o.get("payment_terms"), "reliability": o.get("reliability_score"),
+        "within_authority": o.get("within_authority", True),
+    } for o in offers], indent=2, default=str)
+    prompt = (f"MISSION: {mission.get('title')}\n"
+              f"requirement: {mission.get('description') or mission.get('summary') or mission.get('title')}\n"
+              f"quantity: {mission.get('quantity')}, budget: {mission.get('budget')} {mission.get('currency')}, "
+              f"target_unit: {round(mission['budget']/mission['quantity'],2) if mission.get('budget') and mission.get('quantity') else None}\n"
+              f"delivery_requirement_days: {mission.get('deadline_days')}, min_warranty: {mission.get('warranty_requirements')}\n"
+              f"specifications: {mission.get('specifications')}\n\nOFFERS:\n{offers_desc}")
     raw = await _complete(RECOMMEND_SYSTEM, prompt, session_id)
     try:
-        return _extract_json(raw)
+        result = _extract_json(raw)
+        result.setdefault("recommendation", {
+            "supplier_id": result.get("recommended_offer_id"),
+            "status": "RECOMMENDED", "confidence": "MEDIUM"})
+        return result
     except Exception:
         best = min(offers, key=lambda o: o.get("total_cost") or 1e18) if offers else None
         return {"recommended_offer_id": best["id"] if best else None,
                 "recommendation_score": 60,
-                "reasoning": "Fallback: selected the lowest total landed cost.",
+                "reasoning": "Fallback: selected the lowest total landed cost among available offers.",
                 "risks": ["AI recommendation unavailable — showed lowest landed cost."],
-                "ranking": []}
+                "ranking": [],
+                "recommendation": {"supplier_id": best["id"] if best else None,
+                                   "status": "INSUFFICIENT_INFORMATION", "confidence": "LOW"},
+                "advantages": [], "tradeoffs": [], "unknowns": ["AI analysis unavailable"],
+                "alternatives": [], "recommended_next_step": "Review offers manually.",
+                "normalized": []}
