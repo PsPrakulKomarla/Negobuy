@@ -144,3 +144,18 @@ REACT_APP_BACKEND_URL at start).
 - WhatsApp Cloud API credentials → real fallback/replies.
 - Deep link /direct/:missionId + recent-direct-negotiations list (resume past runs).
 - Telegram: encrypt StringSession at rest; optional approval-mode toggle; link Telegram deals to missions/offers.
+
+## Implemented (2026-08-30) — Pricing revamp + Razorpay TEST checkout
+- billing.py PLANS: renamed "Procurement Mission"→"Procurement Machine" (₹349→₹69/mo, 80% off),
+  "AI Buyer Pro" (₹499→₹119/mo, 76% off), Free (₹0). Added `original_price`; all INR.
+- /api/billing/plans + /subscription now report Razorpay state (payment_configured, mode=TEST).
+- Frontend Pricing.js: strike-through original price + discount badge; "Choose plan" now loads
+  Razorpay checkout.js, POST /billing/orders → opens Razorpay Checkout → handler POST /billing/verify.
+  AuthContext gained refreshUser().
+- payments.py: verified payment now activates plan for both mission & pro.
+- Razorpay TEST keys added to backend/.env (rzp_test_...). Server-side HMAC verify + Mongo storage;
+  frontend success is never trusted. Webhook endpoint (pending secret): POST /api/webhooks/razorpay
+  — configure RAZORPAY_WEBHOOK_SECRET in Razorpay dashboard to enable server-push confirmation.
+- Env note: fresh checkout had NO .env files and was crashing (missing pyaes). Reconstructed
+  backend/.env + frontend/.env, installed pyaes==1.6.1.
+- Tested: iteration_16 (9/9 backend + frontend E2E, 100%). Legacy Stripe stubs left in billing.py (unused).

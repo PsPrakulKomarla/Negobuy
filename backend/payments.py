@@ -105,9 +105,9 @@ async def _activate(order_id, payment_id, source):
                                  {"$set": {"status": "PAID", "payment_id": payment_id,
                                            "paid_at": _now(), "verified_via": source}})
     plan_id = pay.get("plan_id")
-    if plan_id == "pro":
+    if plan_id in ("pro", "mission"):
         await db.users.update_many({"organization_id": pay["organization_id"]},
-                                   {"$set": {"plan": "pro"}})
+                                   {"$set": {"plan": plan_id}})
     await db.subscriptions.update_one(
         {"organization_id": pay["organization_id"]},
         {"$set": {"organization_id": pay["organization_id"], "plan": plan_id,

@@ -12,23 +12,23 @@ router = APIRouter(prefix="/api/billing", tags=["billing"])
 # Configurable plan catalog (prices are placeholders / configurable, not hard-coded commercial commitments).
 PLANS = [
     {
-        "id": "free", "name": "Explorer", "type": "free", "price": 0, "currency": "USD",
-        "interval": None,
+        "id": "free", "name": "Free", "type": "free", "price": 0, "original_price": None,
+        "currency": "INR", "interval": None,
         "features": ["1 active mission", "Vendor discovery", "AI requirement extraction",
                      "Landed-cost comparison"],
         "limits": {"active_missions": 3, "voice_minutes": 30},
     },
     {
-        "id": "mission", "name": "Procurement Mission", "type": "subscription", "price": 500,
-        "currency": "INR", "interval": "month",
+        "id": "mission", "name": "Procurement Machine", "type": "subscription",
+        "price": 69, "original_price": 349, "currency": "INR", "interval": "month",
         "features": ["One full procurement mission", "Supplier research + shortlist",
                      "Verification", "AI negotiation", "Offer comparison", "Final recommendation",
                      "Procurement report"],
         "limits": {"active_missions": 1, "voice_minutes": 30},
     },
     {
-        "id": "pro", "name": "AI Buyer Pro", "type": "subscription", "price": 1000,
-        "currency": "INR", "interval": "month",
+        "id": "pro", "name": "AI Buyer Pro", "type": "subscription",
+        "price": 119, "original_price": 499, "currency": "INR", "interval": "month",
         "features": ["Recurring procurement missions", "Vendor discovery + intelligence",
                      "AI + voice negotiation", "Negotiation memory", "Vendor history",
                      "Savings analytics", "Full procurement history"],
@@ -43,9 +43,10 @@ def stripe_configured() -> bool:
 
 @router.get("/plans")
 async def list_plans():
-    return {"plans": PLANS, "payment_configured": stripe_configured(),
-            "provider": "stripe",
-            "message": None if stripe_configured()
+    configured = razorpay_state() != "NOT_CONFIGURED"
+    return {"plans": PLANS, "payment_configured": configured,
+            "provider": "razorpay", "mode": razorpay_state(),
+            "message": None if configured
             else "Live checkout requires payment configuration. Plans below are available to preview."}
 
 
@@ -58,7 +59,7 @@ async def get_subscription(user: dict = Depends(get_current_user)):
         "plan": user.get("plan", "free"),
         "subscription": sub,
         "usage": usage or {"active_missions": 0, "voice_minutes_used": 0},
-        "payment_configured": stripe_configured(),
+        "payment_configured": razorpay_state() != "NOT_CONFIGURED",
     }
 
 

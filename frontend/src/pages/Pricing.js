@@ -8,9 +8,13 @@ import { Button, Card, Spinner, Badge } from "../components/ui";
 import { useAuth } from "../context/AuthContext";
 
 export default function Pricing({ embedded = false }) {
-  const { user } = useAuth();
+  const { user, refreshUser } = useAuth();
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [processing, setProcessing] = useState(null);
+
+  const sym = (c) => (c === "INR" ? "₹" : c === "USD" ? "$" : "");
+  const discountPct = (orig, price) => Math.round(((orig - price) / orig) * 100);
 
   useEffect(() => {
     api
@@ -19,14 +23,69 @@ export default function Pricing({ embedded = false }) {
       .finally(() => setLoading(false));
   }, []);
 
+  const loadRazorpay = () =>
+    new Promise((resolve) => {
+      if (window.Razorpay) return resolve(true);
+      const s = document.createElement("script");
+      s.src = "https://checkout.razorpay.com/v1/checkout.js";
+      s.onload = () => resolve(true);
+      s.onerror = () => resolve(false);
+      document.body.appendChild(s);
+    });
+
   const checkout = async (planId) => {
-    try {
-      const { data } = await api.post(`/billing/checkout/${planId}`);
-      if (data.status === "not_configured") {
-        toast.info(data.message);
-      }
-    } catch (e) {
+    if (!user) {
       toast.error("Please sign in to continue.");
+      return;
+    }
+    if (planId === "free") {
+      toast.success("You're on the free Explorer plan — start a mission anytime.");
+      return;
+    }
+    setProcessing(planId);
+    try {
+      const { data: order } = await api.post(`/billing/orders`, { plan_id: planId });
+      if (order.status === "NOT_CONFIGURED") {
+        toast.info(order.message || "Payments not configured yet.");
+        return;
+      }
+      const ok = await loadRazorpay();
+      if (!ok) {
+        toast.error("Could not load the Razorpay checkout. Check your connection.");
+        return;
+      }
+      const rzp = new window.Razorpay({
+        key: order.key_id,
+        order_id: order.order.id,
+        amount: order.order.amount,
+        currency: order.order.currency,
+        name: "NegoBuy",
+        description: `${order.plan.name} — monthly`,
+        prefill: { name: user?.name || "", email: user?.email || "" },
+        theme: { color: "#0f9d6a" },
+        handler: async (resp) => {
+          try {
+            await api.post(`/billing/verify`, {
+              razorpay_order_id: resp.razorpay_order_id,
+              razorpay_payment_id: resp.razorpay_payment_id,
+              razorpay_signature: resp.razorpay_signature,
+            });
+            toast.success("Payment verified — your plan is now active!");
+            refreshUser?.();
+          } catch (e) {
+            toast.error("Payment could not be verified. If charged, contact support.");
+          }
+        },
+        modal: { ondismiss: () => setProcessing(null) },
+      });
+      rzp.on("payment.failed", (r) => {
+        toast.error(r?.error?.description || "Payment failed. Please try again.");
+      });
+      rzp.open();
+    } catch (e) {
+      toast.error(e?.response?.status === 401 ? "Please sign in to continue." : "Could not start checkout.");
+    } finally {
+      setProcessing(null);
     }
   };
 
@@ -85,19 +144,31 @@ export default function Pricing({ embedded = false }) {
                   )}
                   <div className="mb-6">
                     <h3 className="font-display text-2xl font-bold">{plan.name}</h3>
-                    <div className="mt-3 flex items-baseline gap-1">
+                    <div className="mt-3 flex items-baseline gap-2 flex-wrap">
                       {plan.price === 0 ? (
-                        <span className="font-display text-3xl font-bold">Free</span>
+                        <span className="font-display text-3xl font-bold">₹0<span className="text-white/40 text-sm font-normal"> /forever</span></span>
                       ) : plan.price == null ? (
                         <span className="font-display text-2xl font-bold text-white/70">Custom</span>
                       ) : (
                         <>
-                          <span className="font-display text-3xl font-bold">{plan.currency === "INR" ? "₹" : "$"}{plan.price}</span>
+                          {plan.original_price ? (
+                            <span className="font-display text-lg font-semibold text-white/30 line-through" data-testid={`plan-original-${plan.id}`}>
+                              {sym(plan.currency)}{plan.original_price}
+                            </span>
+                          ) : null}
+                          <span className="font-display text-3xl font-bold" data-testid={`plan-price-${plan.id}`}>{sym(plan.currency)}{plan.price}</span>
                           {plan.interval && <span className="text-white/40 text-sm">/{plan.interval}</span>}
                         </>
                       )}
                     </div>
-                    <div className="text-[11px] font-mono uppercase tracking-wider text-white/35 mt-1">
+                    {plan.original_price && plan.price ? (
+                      <div className="mt-2">
+                        <Badge className="bg-secondary/15 border-secondary/40 text-secondary" data-testid={`plan-discount-${plan.id}`}>
+                          {discountPct(plan.original_price, plan.price)}% OFF · save {sym(plan.currency)}{plan.original_price - plan.price}/{plan.interval}
+                        </Badge>
+                      </div>
+                    ) : null}
+                    <div className="text-[11px] font-mono uppercase tracking-wider text-white/35 mt-2">
                       {plan.type.replace("_", " ")}
                     </div>
                   </div>
@@ -120,9 +191,16 @@ export default function Pricing({ embedded = false }) {
                       variant={highlight ? "primary" : "secondary"}
                       className="w-full"
                       onClick={() => checkout(plan.id)}
+                      disabled={processing === plan.id}
                       data-testid={`plan-cta-${plan.id}`}
                     >
-                      {plan.id === "free" ? "Get started" : "Choose plan"}
+                      {processing === plan.id ? (
+                        <Spinner className="w-4 h-4" />
+                      ) : plan.id === "free" ? (
+                        "Get started"
+                      ) : (
+                        "Choose plan"
+                      )}
                     </Button>
                   )}
                 </Card>
