@@ -563,7 +563,8 @@ Return ONLY valid JSON:
 
 
 async def extract_vendors(material: str, location: str | None, hits: list, session_id: str) -> list:
-    """Turn raw web-search hits into clean vendor candidates with mobile numbers. Never fabricates."""
+    """Turn raw web-search hits into clean vendor candidates with mobile numbers. Never fabricates.
+    Returns [] on any provider error (caller falls back to regex-extracted phones)."""
     compact = []
     for h in hits[:25]:
         compact.append({"title": h.get("title"), "url": h.get("url"),
@@ -572,8 +573,8 @@ async def extract_vendors(material: str, location: str | None, hits: list, sessi
     prompt = (f"PRODUCT: {material}\nLOCATION PREFERENCE: {location or 'any'}\n\n"
               f"WEB SEARCH RESULTS (JSON):\n{json.dumps(compact, default=str)}\n\n"
               "Extract the vendor list now.")
-    raw = await _complete(VENDOR_EXTRACTION_SYSTEM, prompt, session_id)
     try:
+        raw = await _complete(VENDOR_EXTRACTION_SYSTEM, prompt, session_id)
         data = _extract_json(raw)
         vendors = data.get("vendors", [])
         return vendors if isinstance(vendors, list) else []

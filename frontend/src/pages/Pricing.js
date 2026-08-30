@@ -92,7 +92,7 @@ export default function Pricing({ embedded = false }) {
                         <span className="font-display text-2xl font-bold text-white/70">Custom</span>
                       ) : (
                         <>
-                          <span className="font-display text-3xl font-bold">${plan.price}</span>
+                          <span className="font-display text-3xl font-bold">{plan.currency === "INR" ? "₹" : "$"}{plan.price}</span>
                           {plan.interval && <span className="text-white/40 text-sm">/{plan.interval}</span>}
                         </>
                       )}

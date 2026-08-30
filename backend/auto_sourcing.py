@@ -41,12 +41,14 @@ def _norm_in_mobile(raw: str):
 
 
 # Preferred default vendors that MUST be contacted for certain categories (demo/seed data).
-DEFAULT_TILE_VENDOR = {
-    "name": "SLV Ceramics (Muddinapalya)", "phone": "+919980402205",
-    "location": "Muddinapalya, Bengaluru", "url": None,
-    "note": "Preferred tiles vendor (always contacted for tile requirements).",
-    "default": True,
-}
+DEFAULT_TILE_VENDORS = [
+    {"name": "SLV Ceramics (Muddinapalya)", "phone": "+919980402205",
+     "location": "Muddinapalya, Bengaluru", "url": None,
+     "note": "Preferred tiles vendor (always contacted for tile requirements)."},
+    {"name": "Ananta Ceramics", "phone": "+919945842205",
+     "location": "Bengaluru", "url": None,
+     "note": "Preferred tiles vendor (always contacted for tile requirements)."},
+]
 _TILE_KEYWORDS = ("tile", "tiles", "kajaria", "ceramic", "vitrified")
 
 
@@ -58,10 +60,23 @@ def _is_tiles(material: str) -> bool:
 def _default_vendors(material: str) -> list:
     vendors = []
     if _is_tiles(material):
-        vendors.append({**DEFAULT_TILE_VENDOR, "telegram_reachable": None,
-                        "telegram_user_id": None, "telegram_name": None,
-                        "deal_id": None, "status": "FOUND"})
+        for dv in DEFAULT_TILE_VENDORS:
+            vendors.append({**dv, "default": True, "telegram_reachable": None,
+                            "telegram_user_id": None, "telegram_name": None,
+                            "deal_id": None, "status": "FOUND"})
     return vendors
+
+
+def _vendors_from_hits(hits: list) -> list:
+    """No-LLM fallback: build vendor candidates from phone numbers already regex-scraped
+    from web results. Uses the hit title as the vendor name. Never fabricates numbers."""
+    out = []
+    for h in hits:
+        for ph in (h.get("phones") or []):
+            out.append({"name": (h.get("title") or "Vendor")[:80], "phone": ph,
+                        "location": None, "url": h.get("url"),
+                        "note": "From web search result."})
+    return out
 
 
 class DiscoverBody(BaseModel):
@@ -105,6 +120,9 @@ async def discover(body: DiscoverBody, user: dict = Depends(get_current_user)):
     # 2) AI extracts clean vendor candidates + mobile numbers (no fabrication).
     session = f"sourcing-{uuid.uuid4().hex[:8]}"
     raw_vendors = await ai_service.extract_vendors(body.material, body.location, hits, session)
+    # Fallback if the AI provider is unavailable/rate-limited: use phones already scraped from hits.
+    if not raw_vendors:
+        raw_vendors = _vendors_from_hits(hits)
 
     # 3) Normalize + dedup phones. Tiles requests always include a preferred default vendor.
     candidates, phones_seen = [], set()

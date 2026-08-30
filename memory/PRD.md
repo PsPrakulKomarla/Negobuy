@@ -70,6 +70,20 @@ REACT_APP_BACKEND_URL at start).
   negotiation poller confirmed working (vendor quoted 500, AI countered, quote extracted).
 - Alerts = dashboard live status + best-price banner (no email/SMS yet).
 
+## Orders tab, nav cleanup, INR plans, 2nd default vendor — Aug 2026 (DONE)
+- ORDERS PAGE: /orders (nav "Orders") lists every placed order (vendor, phone, qty, unit price, total,
+  status, time) + count/total-value summary. Data from GET /api/telegram/orders.
+- NAV CLEANUP (AppLayout): removed Missions, New Mission, Direct Negotiation, Comms Hub, Team.
+  Nav now: Command Center, Auto-Sourcing, Telegram AI, Orders, Plans. (Routes kept, only tabs removed.)
+- PLANS (billing.py, INR): Explorer Free; Procurement Mission ₹500/month; AI Buyer Pro ₹1000/month.
+  Pricing.js renders ₹ for INR.
+- 2ND DEFAULT TILE VENDOR: DEFAULT_TILE_VENDORS now = SLV Ceramics (+919980402205) + Ananta Ceramics
+  (+919945842205). Both injected first for tile requests; both Telegram-reachable (verified).
+- GEMINI QUOTA RESILIENCE: provided GEMINI_API_KEY is FREE-TIER (20 req/day). extract_vendors now
+  swallows provider errors and discover() falls back to regex-scraped phones from web hits, so sourcing
+  keeps working (incl. default vendors) even when Gemini is 429-rate-limited. NOTE: heavy AI features
+  (mission/requirement extraction) will 429 once the daily 20 is hit — user should add billing to the key.
+
 ## Orders, Comparison, Default Vendor, Login-persistence fix — Aug 2026 (DONE)
 - BUG FIX: Telegram "Start the login first" after entering code. Root cause: pending login (Telethon
   session/auth key + phone_code_hash) was in-memory only and wiped by backend restart between
