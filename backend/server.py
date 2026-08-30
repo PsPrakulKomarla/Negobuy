@@ -34,6 +34,7 @@ from voice_bridge import router as voice_bridge_router
 from communication_service import router as communication_router
 import telegram_userbot
 from telegram_userbot import router as telegram_userbot_router
+from auto_sourcing import router as auto_sourcing_router
 from assurance import router as assurance_router
 from mission_orchestrator import router as orchestrator_router
 from landed_cost import compute_landed_cost
@@ -616,6 +617,7 @@ app.include_router(direct_negotiation_router)
 app.include_router(voice_bridge_router)
 app.include_router(communication_router)
 app.include_router(telegram_userbot_router)
+app.include_router(auto_sourcing_router)
 app.include_router(assurance_router)
 app.include_router(orchestrator_router)
 

@@ -11,6 +11,7 @@ import {
   PhoneCall,
   MessagesSquare,
   Send,
+  Sparkles,
 } from "lucide-react";
 import { useAuth } from "../context/AuthContext";
 
@@ -18,6 +19,7 @@ const NAV = [
   { to: "/dashboard", label: "Command Center", icon: LayoutDashboard },
   { to: "/missions", label: "Missions", icon: Target },
   { to: "/missions/new", label: "New Mission", icon: Plus },
+  { to: "/sourcing", label: "Auto-Sourcing", icon: Sparkles },
   { to: "/direct", label: "Direct Negotiation", icon: PhoneCall },
   { to: "/telegram", label: "Telegram AI", icon: Send },
   { to: "/communications", label: "Comms Hub", icon: MessagesSquare },

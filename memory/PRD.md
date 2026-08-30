@@ -48,7 +48,35 @@ REACT_APP_BACKEND_URL at start).
 - WhatsApp Cloud API: NOT_CONFIGURED — fallback/replies are SIMULATED and clearly labelled.
 - No endpoint creates a purchase/order. Human approval records intent only.
 
-## Telegram AI Negotiator (userbot, real @username DMs) — Aug 2026
+## Auto-Sourcing Agent (web discovery -> Telegram negotiation) — Aug 2026
+- New "Auto-Sourcing" tab: buyer enters material+specs, qty/unit, target/max price, city, max vendors.
+- backend/auto_sourcing.py:
+  - POST /api/sourcing/discover -> discovery.web_search (Tavily keyless) across supplier-intent queries;
+    ai_service.extract_vendors() (active provider) turns raw hits into clean vendors + Indian mobile numbers
+    (never fabricated); normalizes/dedups phones; batch-resolves Telegram reachability via
+    tg.resolve_phones_batch (one ImportContacts call). Stores sourcing_campaigns.
+  - POST /api/sourcing/campaigns/{id}/launch {phones?} -> for approved, Telegram-reachable vendors,
+    starts real negotiations via tg.start_deal_internal. Human review before any message (anti-ban).
+  - GET /api/sourcing/campaigns[/{id}] -> candidates + live deal status/quotes + best price.
+- ai_service.extract_vendors() added (VENDOR_EXTRACTION_SYSTEM, no fabrication, 10-digit IN mobiles).
+- telegram_userbot.py: refactored create_deal into start_deal_internal(); added get_client(),
+  resolve_phones_batch(). REPLACED flaky live event handler with a reload-proof POLLER
+  (_poll_org/_poll_deal every 5s, last_in_id dedupe) — fixes "AI not replying after vendor reply"
+  caused by hot-reload dropping Telethon updates (catch_up off).
+- frontend: AutoSourcing.js (route /sourcing, nav "Auto-Sourcing"): discover form, vendor list with
+  on/off-telegram badges, review + "Negotiate all/selected", live per-vendor chat + best-price banner.
+- Verified LIVE: web search returned 7 real Kajaria tile vendors in Bengaluru with real mobiles;
+  1 reachable on Telegram correctly flagged, others honestly marked not-on-telegram. Telegram
+  negotiation poller confirmed working (vendor quoted 500, AI countered, quote extracted).
+- Alerts = dashboard live status + best-price banner (no email/SMS yet).
+
+## PENDING (explicitly requested, not yet built)
+- GEMINI provider integration: add backend/ai/ provider abstraction (base/factory/gemini/openai/xai),
+  AI_PROVIDER env switch, GEMINI_API_KEY (AQ. format, verified working with model gemini-3.6-flash via
+  google-genai 2.20.0), GET /api/ai/status. Route ai_service._complete through the active provider.
+  Groundwork done: key+model verified, google-genai installed. NOT wired yet.
+
+## Telegram AI Negotiator (userbot) — Aug 2026
 - Requirement: reach a vendor by @username and let AI negotiate to a target price, no simulation.
 - Bot API CANNOT DM by username → used Telethon USERBOT (MTProto user account). Playbook via integration_expert.
 - backend/telegram_userbot.py:

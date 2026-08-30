@@ -544,6 +544,45 @@ Produce the plan now."""
                                  "buyer to discuss a potential purchase. Is this a good time to talk?")}
 
 
+VENDOR_EXTRACTION_SYSTEM = """You are NegoBuy's Sourcing Agent. You are given raw web search results for
+suppliers of a product. Extract a clean list of real vendor businesses that have a usable INDIAN MOBILE
+number (10 digits starting 6-9) so they can be contacted on Telegram/WhatsApp.
+Rules:
+- NEVER invent a phone number, name, or business. Use ONLY numbers/names present in the provided results.
+- Prefer mobile numbers over landlines/toll-free. Ignore numbers that are clearly not Indian mobiles.
+- Deduplicate by phone number. Keep the most relevant supplier for each number.
+- If a result has no usable mobile number, skip it.
+Return ONLY valid JSON:
+{
+  "vendors": [
+    { "name": string (business/person name, best from evidence),
+      "phone": string (digits only, 10-digit Indian mobile, no +91),
+      "location": string|null,
+      "url": string|null,
+      "note": string (one short line on why relevant) }
+  ]
+}"""
+
+
+async def extract_vendors(material: str, location: str | None, hits: list, session_id: str) -> list:
+    """Turn raw web-search hits into clean vendor candidates with mobile numbers. Never fabricates."""
+    compact = []
+    for h in hits[:25]:
+        compact.append({"title": h.get("title"), "url": h.get("url"),
+                        "snippet": (h.get("snippet") or "")[:400],
+                        "phones": h.get("phones", [])})
+    prompt = (f"PRODUCT: {material}\nLOCATION PREFERENCE: {location or 'any'}\n\n"
+              f"WEB SEARCH RESULTS (JSON):\n{json.dumps(compact, default=str)}\n\n"
+              "Extract the vendor list now.")
+    raw = await _complete(VENDOR_EXTRACTION_SYSTEM, prompt, session_id)
+    try:
+        data = _extract_json(raw)
+        vendors = data.get("vendors", [])
+        return vendors if isinstance(vendors, list) else []
+    except Exception:
+        return []
+
+
 async def recommend(mission: dict, offers: list, session_id: str) -> dict:
     offers_desc = json.dumps([{
         "offer_id": o["id"], "vendor": o.get("vendor_name"),

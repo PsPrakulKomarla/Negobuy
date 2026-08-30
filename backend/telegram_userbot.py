@@ -16,7 +16,7 @@ from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
-from telethon import TelegramClient, events
+from telethon import TelegramClient
 from telethon.errors import (
     FloodWaitError, PhoneCodeExpiredError, PhoneCodeInvalidError,
     SessionPasswordNeededError, UsernameInvalidError, UsernameNotOccupiedError,
@@ -40,6 +40,8 @@ MAX_AI_TURNS = 30
 clients: dict = {}          # org_id -> TelegramClient
 login_state: dict = {}      # org_id -> {phone, phone_code_hash, api_id, api_hash}
 deal_locks: dict = {}       # deal_id -> asyncio.Lock
+pollers: dict = {}          # org_id -> asyncio.Task
+POLL_INTERVAL = 5           # seconds between inbound checks
 
 
 def _now():
@@ -145,18 +147,52 @@ async def _build_client(api_id: int, api_hash: str, session: str = "") -> Telegr
     return client
 
 
-def _make_handler(org_id: str):
-    async def handler(event):
-        try:
-            await _on_vendor_message(org_id, event)
-        except Exception:
-            log.exception("telegram handler error org=%s", org_id)
-    return handler
+def _start_poller(org_id: str, client: TelegramClient):
+    """One background poller per org — reload-proof inbound detection."""
+    existing = pollers.get(org_id)
+    if existing and not existing.done():
+        return
+    pollers[org_id] = asyncio.create_task(_poll_org(org_id, client))
 
 
 async def _register_handler(org_id: str, client: TelegramClient):
-    client.add_event_handler(_make_handler(org_id), events.NewMessage(incoming=True))
-    asyncio.create_task(_keep_alive(org_id, client))
+    # Polling is the source of truth (survives restarts / never misses replies).
+    _start_poller(org_id, client)
+
+
+async def _poll_org(org_id: str, client: TelegramClient):
+    log.info("telegram poller started org=%s", org_id)
+    while True:
+        try:
+            if not client.is_connected():
+                await client.connect()
+            db = get_db()
+            deals = await db.telegram_deals.find(
+                {"organization_id": org_id, "status": "ACTIVE"}, {"_id": 0}).to_list(50)
+            for deal in deals:
+                try:
+                    await _poll_deal(org_id, client, deal)
+                except Exception:
+                    log.exception("poll_deal error deal=%s", deal.get("id"))
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            log.exception("poller loop error org=%s", org_id)
+        await asyncio.sleep(POLL_INTERVAL)
+
+
+async def _poll_deal(org_id: str, client: TelegramClient, deal: dict):
+    """Fetch the vendor conversation and process any inbound message newer than last seen."""
+    last_in_id = deal.get("last_in_id", 0)
+    msgs = await client.get_messages(deal["vendor_user_id"], limit=15)
+    # Oldest -> newest so we process replies in order.
+    new_inbound = [m for m in reversed(msgs)
+                   if (not getattr(m, "out", False)) and m.id > last_in_id and (m.raw_text or "").strip()]
+    for m in new_inbound:
+        await _process_inbound(org_id, client, deal["id"], m.raw_text, m.id)
+        deal = await get_db().telegram_deals.find_one({"id": deal["id"]}, {"_id": 0}) or deal
+        if deal.get("status") != "ACTIVE":
+            break
 
 
 async def _keep_alive(org_id: str, client: TelegramClient):
@@ -188,6 +224,8 @@ async def startup():
 
 
 async def shutdown():
+    for task in list(pollers.values()):
+        task.cancel()
     for client in list(clients.values()):
         try:
             if client.is_connected():
@@ -197,21 +235,18 @@ async def shutdown():
 
 
 # --------------------------------------------------------------------------- #
-# Incoming vendor message -> autonomous AI negotiation
+# Incoming vendor message -> autonomous AI negotiation (shared by poller)
 # --------------------------------------------------------------------------- #
-async def _on_vendor_message(org_id: str, event):
+async def _process_inbound(org_id: str, client: TelegramClient, deal_id: str,
+                           text: str, in_msg_id: int):
     db = get_db()
-    sender_id = event.sender_id
-    deal = await db.telegram_deals.find_one(
-        {"organization_id": org_id, "vendor_user_id": sender_id, "status": "ACTIVE"}, {"_id": 0})
-    if not deal:
-        return  # no active negotiation with this person — ignore
-
-    async with _lock(deal["id"]):
-        deal = await db.telegram_deals.find_one({"id": deal["id"]}, {"_id": 0})
+    async with _lock(deal_id):
+        deal = await db.telegram_deals.find_one({"id": deal_id}, {"_id": 0})
         if not deal or deal.get("status") != "ACTIVE":
             return
-        text = event.raw_text or ""
+        if in_msg_id <= deal.get("last_in_id", 0):
+            return  # already processed
+        text = (text or "").strip()
         transcript = deal.get("transcript", [])
         transcript.append({"role": "vendor", "text": text, "at": _now()})
         turns = deal.get("ai_turns", 0)
@@ -245,19 +280,19 @@ async def _on_vendor_message(org_id: str, event):
         send_status = "SKIPPED"
         if msg:
             try:
-                await event.client.send_message(await event.get_input_sender(), msg)
+                await client.send_message(deal["vendor_user_id"], msg)
                 send_status = "SENT"
                 transcript.append({"role": "ai", "text": msg, "at": _now()})
             except FloodWaitError as e:
                 send_status = f"FLOOD_WAIT_{e.seconds}s"
             except Exception:
-                log.exception("send failed deal=%s", deal["id"])
+                log.exception("send failed deal=%s", deal_id)
                 send_status = "SEND_FAILED"
 
         upd = {
             "transcript": transcript, "status": status,
             "ai_turns": turns + 1, "updated_at": _now(),
-            "last_send_status": send_status,
+            "last_send_status": send_status, "last_in_id": in_msg_id,
         }
         if quoted is not None:
             upd["latest_quote"] = quoted
@@ -265,7 +300,7 @@ async def _on_vendor_message(org_id: str, event):
             upd["agreed_price"] = agreed_price
         if status != "ACTIVE":
             upd["outcome_summary"] = decision.get("reasoning")
-        await db.telegram_deals.update_one({"id": deal["id"]}, {"$set": upd})
+        await db.telegram_deals.update_one({"id": deal_id}, {"$set": upd})
         await audit.log_event(org_id, "telegram_negotiation",
                               detail=f"[telegram] {deal.get('vendor_username')} -> {status} "
                                      f"(quote {quoted})")
@@ -459,23 +494,62 @@ async def create_deal(body: DealBody, user: dict = Depends(get_current_user)):
         raise HTTPException(status_code=400, detail="Maximum price must be >= target price")
 
     entity, vendor_ref = await _resolve_vendor(client, body.vendor_username, body.vendor_name)
+    deal = await start_deal_internal(
+        org, user["id"], client, entity, vendor_ref,
+        vendor_name=body.vendor_name, material=body.material, quantity=body.quantity,
+        unit=body.unit, target_price=body.target_price, max_price=body.max_price,
+        currency=body.currency, notes=body.notes)
+    return deal
 
+
+def get_client(org: str):
+    return clients.get(org)
+
+
+async def resolve_phones_batch(client, phones: list) -> dict:
+    """Resolve many phone numbers to Telegram users in one ImportContacts call.
+    Returns {phone: {"user_id": int, "name": str} | None}."""
+    out = {p: None for p in phones}
+    if not phones:
+        return out
+    contacts = [InputPhoneContact(client_id=i, phone=p, first_name=f"Vendor{i}", last_name="")
+                for i, p in enumerate(phones)]
+    try:
+        res = await client(ImportContactsRequest(contacts))
+    except Exception:
+        return out
+    # Map imported client_id -> user_id, then user_id -> user entity.
+    id_by_client = {imp.client_id: imp.user_id for imp in getattr(res, "imported", [])}
+    users_by_id = {u.id: u for u in getattr(res, "users", [])}
+    for i, p in enumerate(phones):
+        uid = id_by_client.get(i)
+        if uid and uid in users_by_id:
+            u = users_by_id[uid]
+            name = (u.first_name or "") + ((" " + u.last_name) if u.last_name else "")
+            out[p] = {"user_id": uid, "name": name.strip() or None, "username": u.username}
+    return out
+
+
+async def start_deal_internal(org, created_by, client, entity, vendor_ref, *, vendor_name=None,
+                              material, quantity=None, unit=None, target_price, max_price,
+                              currency="INR", notes=None, source=None):
+    """Create + kick off a Telegram negotiation programmatically (used by auto-sourcing too)."""
     deal = {
-        "id": uuid.uuid4().hex, "organization_id": org, "created_by": user["id"],
+        "id": uuid.uuid4().hex, "organization_id": org, "created_by": created_by,
         "vendor_username": vendor_ref, "vendor_user_id": entity.id,
-        "vendor_display_name": body.vendor_name or getattr(entity, "first_name", None) or vendor_ref,
-        "material": body.material, "quantity": body.quantity, "unit": body.unit,
-        "currency": body.currency, "target_price": body.target_price, "max_price": body.max_price,
-        "notes": body.notes, "status": "ACTIVE", "transcript": [], "ai_turns": 0,
-        "latest_quote": None, "agreed_price": None, "outcome_summary": None,
-        "created_at": _now(), "updated_at": _now(),
+        "vendor_display_name": vendor_name or getattr(entity, "first_name", None) or vendor_ref,
+        "material": material, "quantity": quantity, "unit": unit,
+        "currency": currency, "target_price": target_price, "max_price": max_price,
+        "notes": notes, "status": "ACTIVE", "transcript": [], "ai_turns": 0,
+        "latest_quote": None, "agreed_price": None, "outcome_summary": None, "last_in_id": 0,
+        "source": source, "created_at": _now(), "updated_at": _now(),
     }
-
     opener = await ai_negotiate(deal, opening=True)
     msg = (opener.get("message") or "").strip() or (
-        f"Hi, I'm interested in {body.material}. Could you share your best price and availability?")
+        f"Hi, I'm interested in {material}. Could you share your best price and availability?")
     try:
-        await client.send_message(entity, msg)
+        sent = await client.send_message(entity, msg)
+        deal["last_in_id"] = getattr(sent, "id", 0)
     except FloodWaitError as e:
         raise HTTPException(status_code=429, detail=f"Telegram flood wait: retry after {e.seconds}s")
     except Exception:
@@ -483,8 +557,9 @@ async def create_deal(body: DealBody, user: dict = Depends(get_current_user)):
 
     deal["transcript"].append({"role": "ai", "text": msg, "at": _now()})
     await get_db().telegram_deals.insert_one(dict(deal))
-    await audit.log_event(org, "telegram_negotiation", actor=user.get("name"),
-                          detail=f"[telegram] opened negotiation with {vendor_ref} for {body.material}")
+    await audit.log_event(org, "telegram_negotiation", actor=None,
+                          detail=f"[telegram] opened negotiation with {vendor_ref} for {material}")
+    _start_poller(org, client)
     deal.pop("_id", None)
     return deal
 
