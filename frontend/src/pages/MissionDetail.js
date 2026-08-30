@@ -24,6 +24,7 @@ import api, { formatApiError } from "../lib/api";
 import BuyerScene from "../three/BuyerScene";
 import OutreachModal from "../components/OutreachModal";
 import ExotelCallModal from "../components/ExotelCallModal";
+import MissionCommandCenter from "../components/MissionCommandCenter";
 import {
   Button,
   Card,
@@ -269,6 +270,8 @@ export default function MissionDetail() {
           {downloading ? <Spinner /> : <FileDown size={15} />} Download report
         </Button>
       </div>
+
+      <MissionCommandCenter missionId={id} />
 
       <Card glass className="p-4 mb-6">
         <Pipeline status={mission.status} />
