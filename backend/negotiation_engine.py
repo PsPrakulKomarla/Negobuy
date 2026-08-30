@@ -13,7 +13,7 @@ import vendor_memory
 import audit
 
 router = APIRouter(prefix="/api/missions", tags=["negotiation-engine"])
-REAL_CHANNELS = {"whatsapp", "phone", "exotel"}
+REAL_CHANNELS = {"whatsapp", "phone", "exotel", "telegram", "instagram"}
 _OFFER_KEYS = ["unit_price", "quantity", "total_price", "shipping_included", "shipping_cost",
                "taxes", "fees", "delivery_days", "warranty", "payment_terms", "moq",
                "availability", "validity", "return_terms"]

@@ -31,6 +31,9 @@ from negotiation_engine import router as negotiation_engine_router
 from call_center import router as call_center_router
 from direct_negotiation import router as direct_negotiation_router
 from voice_bridge import router as voice_bridge_router
+from communication_service import router as communication_router
+import telegram_userbot
+from telegram_userbot import router as telegram_userbot_router
 from assurance import router as assurance_router
 from mission_orchestrator import router as orchestrator_router
 from landed_cost import compute_landed_cost
@@ -611,6 +614,8 @@ app.include_router(negotiation_engine_router)
 app.include_router(call_center_router)
 app.include_router(direct_negotiation_router)
 app.include_router(voice_bridge_router)
+app.include_router(communication_router)
+app.include_router(telegram_userbot_router)
 app.include_router(assurance_router)
 app.include_router(orchestrator_router)
 
@@ -620,4 +625,16 @@ async def startup():
     await create_indexes()
     await seed_admin()
     register_realtime(app)
+    try:
+        await telegram_userbot.startup()
+    except Exception as e:
+        print(f"[NegoBuy] telegram userbot startup skipped: {e}")
     print("[NegoBuy] startup complete")
+
+
+@app.on_event("shutdown")
+async def shutdown():
+    try:
+        await telegram_userbot.shutdown()
+    except Exception:
+        pass

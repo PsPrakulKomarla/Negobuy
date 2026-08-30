@@ -48,8 +48,32 @@ REACT_APP_BACKEND_URL at start).
 - WhatsApp Cloud API: NOT_CONFIGURED — fallback/replies are SIMULATED and clearly labelled.
 - No endpoint creates a purchase/order. Human approval records intent only.
 
+## Telegram AI Negotiator (userbot, real @username DMs) — Aug 2026
+- Requirement: reach a vendor by @username and let AI negotiate to a target price, no simulation.
+- Bot API CANNOT DM by username → used Telethon USERBOT (MTProto user account). Playbook via integration_expert.
+- backend/telegram_userbot.py:
+  - Per-org Telethon client managed in FastAPI lifespan (startup reconnects saved sessions; shutdown disconnects).
+  - Account linking: POST /api/telegram/link/start {api_id,api_hash,phone} -> send code; /link/verify {code,password?}
+    -> StringSession persisted in db.telegram_accounts (per organization_id). GET /status, POST /unlink.
+  - Deals: POST /api/telegram/deals {vendor_username, material, quantity, unit, target_price, max_price, currency, notes}
+    resolves @username, sends AI opener. GET /deals, GET /deals/{id}, POST /deals/{id}/stop.
+  - Autonomous engine: incoming vendor msg -> ai_negotiate() (Claude Sonnet 5 via EMERGENT_LLM_KEY, model id
+    "claude-sonnet-5") returns strict JSON {message, quoted_price, deal_reached, give_up}. HARD guard: never
+    closes above max_price (overrides deal_reached). Turn cap 30. Statuses ACTIVE/DEAL_REACHED/FAILED/STOPPED.
+- frontend: TelegramNegotiation.js (route /telegram, nav "Telegram AI"): link panel (api_id/hash/phone+code),
+  new-deal form, live-polling transcript with target/latest-quote/max header + outcome banner.
+- Verified: AI brain tested standalone with real Claude — counters above-max quote (1500 vs max 1100, no accept),
+  accepts at/below target (890 vs target 900). Backend endpoints return correct contracts; page mounts.
+- NOT yet live-tested end-to-end: requires user's real Telegram API ID/Hash/phone (entered in the UI, OTP login)
+  + a real vendor chat. Userbot carries Telegram ToS risk (uses a real user account).
+- Dep added: telethon==1.44.0.
+
+## Google login (Emergent-managed) — verified Aug 2026
+- iteration_13: backend 14/14 + frontend routing/regression green. Added defensive guard in auth.py
+  google_session() (401 if session-data payload lacks email). Full OAuth is user-confirmed working.
+
 ## Backlog (P1/P2)
 - Exotel App-Bazaar streaming applet → real live in-call AI (needs provider dashboard config).
 - WhatsApp Cloud API credentials → real fallback/replies.
 - Deep link /direct/:missionId + recent-direct-negotiations list (resume past runs).
-- Unique index on (mission_id, kind='fallback'); split DirectNegotiation.js as it grows.
+- Telegram: encrypt StringSession at rest; optional approval-mode toggle; link Telegram deals to missions/offers.

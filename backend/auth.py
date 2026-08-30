@@ -229,6 +229,8 @@ async def google_session(body: SessionBody, response: Response):
     if r.status_code != 200:
         raise HTTPException(status_code=401, detail="Invalid session")
     data = r.json()
+    if not data.get("email"):
+        raise HTTPException(status_code=401, detail="Invalid session")
     db = get_db()
     email = data["email"].lower()
     user = await db.users.find_one({"email": email})

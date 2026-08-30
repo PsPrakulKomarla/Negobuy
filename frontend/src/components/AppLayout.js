@@ -9,6 +9,8 @@ import {
   ChevronRight,
   Users,
   PhoneCall,
+  MessagesSquare,
+  Send,
 } from "lucide-react";
 import { useAuth } from "../context/AuthContext";
 
@@ -17,6 +19,8 @@ const NAV = [
   { to: "/missions", label: "Missions", icon: Target },
   { to: "/missions/new", label: "New Mission", icon: Plus },
   { to: "/direct", label: "Direct Negotiation", icon: PhoneCall },
+  { to: "/telegram", label: "Telegram AI", icon: Send },
+  { to: "/communications", label: "Comms Hub", icon: MessagesSquare },
   { to: "/team", label: "Team", icon: Users },
   { to: "/plans", label: "Plans", icon: CreditCard },
 ];

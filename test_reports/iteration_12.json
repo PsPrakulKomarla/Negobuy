@@ -1,0 +1,42 @@
+{
+  "summary": "Tested the new multi-channel AI Messaging Negotiation Hub (backend /api/communication + frontend /communications) plus regression on Direct Negotiation and Call Center. Backend: 22/22 new pytest cases pass (provider status NOT_CONFIGURED for telegram/whatsapp/instagram with no secret leakage, negotiation start with honest NOT_CONFIGURED delivery, validation 404/400 cases, Telegram inbound webhook running the SHARED engine with quote extraction (780), idempotency (duplicate update_id -> 'duplicate', no extra messages), webhook auth 401 on wrong secret, 'ignored' for bot/non-text, 'no_conversation' + zero writes for unknown chat, above-max quote (1500 vs max 900) -> BUYER_APPROVAL_REQUIRED + within_authority false + AI reply does not accept, approve ACCEPT/REJECT/COUNTER/CLARIFY states, invalid action 400, org isolation 404 on detail/approve/start, and NO orders/purchases/purchase_orders docs created by any communication endpoint). Regression: test_call_center.py 27/27 pass, /api/direct-negotiation/prepare returns a plan. Frontend: login -> 'Comms Hub' nav -> /communications loads, 3 provider chips show NOT CONFIGURED, start modal (mission -> vendor -> telegram -> recipient) creates a conversation, list + detail with metric tiles and NEGOBUY AI outreach bubble marked NOT_CONFIGURED, and the approval panel Accept flow flips stage to APPROVED with 'Decision: ACCEPT'. No console errors, no error elements.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "POST /api/communication/{channel}/webhook", "issue": "Inbound conversation lookup is db.conversations.find_one({channel, recipient}) with no organization/mission scoping and no ordering — if the same chat id/phone is used by two orgs (or two missions), the inbound message and the engine turn can be attributed to an arbitrary/wrong conversation (cross-org attribution risk). Suggest scoping+sorting by last_activity and, ideally, per-org provider identity."},
+      {"endpoint": "POST /api/communication/negotiations/start", "issue": "When the provider is NOT_CONFIGURED the conversation comm_state is set to 'OUTREACH_FAILED' — semantically this is not a failure but 'not sent / provider not configured'. A distinct state (e.g. OUTREACH_PENDING_SETUP) would be more honest and avoids the misleading 'OUTREACH FAILED' badge in the UI."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "CommunicationHub detail Stage tile", "issue": "Stage value truncates: 'BUYER APPROVAL ...' — tile width too small for the longest state labels", "selector": "[data-testid=\"comm-detail\"]", "priority": "LOW"}
+    ],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "/communications conversation list", "issues": ["List rows show only vendor name + state + quote; channel and recipient (chat id) are not shown, so multiple conversations with the same vendor on different recipients are indistinguishable", "Rows labelled 'OUTREACH FAILED' for the NOT_CONFIGURED case read as an error to the user (see backend minor issue)"]}
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_communication_hub.py",
+    "/app/test_reports/pytest/communication_hub.xml",
+    "/app/test_reports/pytest/call_center_regress.xml"
+  ],
+  "action_items": [
+    "Scope the inbound webhook conversation lookup (org/mission) and sort by last_activity to avoid mis-attribution when a chat id is reused.",
+    "Rename the NOT_CONFIGURED outreach state away from 'OUTREACH_FAILED' (backend + UI badge).",
+    "Widen/wrap the Stage metric tile so 'BUYER APPROVAL REQUIRED' is fully visible; add channel + recipient to conversation list rows."
+  ],
+  "critical_code_review_comments": [
+    "communication_service._handle_inbound: conversation match on {channel, recipient} only — add organization/mission scoping and deterministic ordering.",
+    "Idempotency via comm_events._id = provider event id is correct and verified; keep event ids channel-prefixed (already done) to avoid cross-provider collisions.",
+    "No purchase/order writes were found in any /api/communication path — verified empirically by counting orders/purchases/purchase_orders before and after inbound + ACCEPT."
+  ],
+  "updated_files": ["/app/backend/tests/test_communication_hub.py"],
+  "success_rate": {"backend": "100%", "frontend": "100%"},
+  "seed_data_creation": "Test conversations on mission 4502b5e0ebe84e909b72eca85927dc4c / vendor 27e789fa0784487697f81f7f3af6ec42 with recipients tg*/tgmax*/555777*; one TEST_ org user for isolation checks; one TEST_Comm Regression Tiles direct-negotiation plan.",
+  "should_call_test_agent_after_fix": false,
+  "should_main_agent_self_test": true,
+  "test_credentials": "admin@negobuy.ai / NegoBuy@2026; TELEGRAM_WEBHOOK_SECRET from backend/.env used as X-Telegram-Bot-Api-Secret-Token",
+  "context_for_next_testing_agent": "Communication Hub fully covered by /app/backend/tests/test_communication_hub.py (22 cases, run with -p no:xdist; engine turns are fast ~5-25s). Telegram delivery NOT_CONFIGURED is expected/honest. Frontend flows (start modal, list, detail, approval Accept) verified via Playwright. Only cosmetic/state-naming and inbound-lookup-scoping items remain open.",
+  "rca_of_the_issue": "N/A — no functional defects found. The 'OUTREACH FAILED' label originates from communication_service.start setting comm_state to OUTREACH_FAILED whenever send.ok is False, which includes the legitimate NOT_CONFIGURED case."
+}
