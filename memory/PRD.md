@@ -185,3 +185,18 @@ REACT_APP_BACKEND_URL at start).
   follows redirects, logs upstream status/body, and returns 502 (not 500) on network error.
 - Verified iteration_19: Playwright confirmed EXACTLY 1 POST to /google/session under StrictMode
   (previously 2); graceful 401 on bad session; email-auth regression 13/13 green.
+
+## Hardened (2026-08-30) — Google OAuth (Emergent-managed) production-grade
+- ARCHITECTURE (important): NOT direct Google Cloud OAuth. Emergent hosts the OAuth client
+  (client id/secret/consent/redirect URIs live on Emergent). Our flow: frontend ->
+  auth.emergentagent.com/?redirect=<origin>/dashboard -> return <origin>/dashboard#session_id=X
+  -> POST /api/auth/google/session -> backend exchanges X at demobackend.../oauth/session-data.
+- ROOT CAUSES fixed: (1) StrictMode double-consume of single-use session_id; (2) blank Google
+  profile name -> IndexError -> 500 for new users.
+- Hardening: module-level dedupe guard (frontend), idempotent _gsession_cache + follow_redirects
+  + structured error codes (SESSION_INVALID_OR_EXPIRED / GOOGLE_PROFILE_INCOMPLETE /
+  USER_PROVISIONING_FAILED / 502 upstream) + safe logging (no secrets/tokens), duplicate-email
+  race handled, GET /api/auth/health (jwt_secret/db/upstream booleans).
+- Verified iteration_20: 35/35 backend (incl. httpx-monkeypatched new-user/existing-user/idempotency)
+  + frontend 5/5 (exactly-1 POST under StrictMode, reload keeps session).
+- Test suites: tests/test_google_monkeypatch.py, test_auth_health.py, test_google_auth.py.

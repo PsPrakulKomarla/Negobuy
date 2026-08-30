@@ -26,9 +26,18 @@ export default function AuthCallback() {
     processedSessions.add(sid);
     googleSession(sid)
       .then(() => navigate("/dashboard", { replace: true }))
-      .catch(() => {
+      .catch((err) => {
         processedSessions.delete(sid);
-        setError("Google sign-in failed.");
+        const detail = err?.response?.data?.detail;
+        // Developer diagnostics (no secrets) — visible in the browser console / network tab.
+        console.error("[google-auth] session exchange failed:", {
+          status: err?.response?.status,
+          detail,
+        });
+        const expired = typeof detail === "string" && detail.startsWith("SESSION_INVALID_OR_EXPIRED");
+        setError(expired
+          ? "That sign-in link expired. Redirecting you to sign in again…"
+          : "Google sign-in failed. Redirecting…");
         setTimeout(() => navigate("/login"), 1800);
       });
     // eslint-disable-next-line

@@ -102,10 +102,12 @@ async def _create_user(email, password, name, org_name, role="owner"):
     db = get_db()
     user_id = uuid.uuid4().hex
     org_id = uuid.uuid4().hex
-    org_name = org_name or f"{name.split()[0]}'s Workspace"
+    safe_name = (name or "").strip() or (email.split("@")[0] if email else "User")
+    first = safe_name.split()[0] if safe_name.split() else "My"
+    org_name = (org_name or "").strip() or f"{first}'s Workspace"
     now = datetime.now(timezone.utc).isoformat()
     user = {
-        "id": user_id, "email": email.lower(), "name": name,
+        "id": user_id, "email": email.lower(), "name": safe_name,
         "password_hash": hash_password(password) if password else None,
         "role": role, "organization_id": org_id, "organization_name": org_name,
         "plan": "free", "avatar": None, "created_at": now,
@@ -260,26 +262,64 @@ async def google_session(body: SessionBody, response: Response):
         if r.status_code != 200:
             log.error("google session exchange failed status=%s body=%s",
                       r.status_code, (r.text or "")[:500])
-            raise HTTPException(status_code=401, detail="Invalid session")
+            raise HTTPException(status_code=401,
+                                detail="SESSION_INVALID_OR_EXPIRED: sign-in link was already used or expired. Please try again.")
         try:
             data = r.json()
         except Exception:
             log.error("google session-data non-JSON body=%s", (r.text or "")[:500])
-            raise HTTPException(status_code=401, detail="Invalid session")
+            raise HTTPException(status_code=401,
+                                detail="SESSION_INVALID_OR_EXPIRED: unexpected auth response.")
         if not data.get("email"):
             log.error("google session-data missing email: keys=%s", list(data.keys()))
-            raise HTTPException(status_code=401, detail="Invalid session")
+            raise HTTPException(status_code=401,
+                                detail="GOOGLE_PROFILE_INCOMPLETE: no email returned by Google.")
         _gcache_put(body.session_id, data)
     db = get_db()
     email = data["email"].lower()
-    user = await db.users.find_one({"email": email})
-    if not user:
-        user = await _create_user(email, None, data.get("name", email.split("@")[0]), None)
-        await db.users.update_one({"id": user["id"]}, {"$set": {"avatar": data.get("picture")}})
-        user["avatar"] = data.get("picture")
+    name = (data.get("name") or "").strip() or email.split("@")[0]
+    try:
+        user = await db.users.find_one({"email": email})
+        if not user:
+            user = await _create_user(email, None, name, None)
+            await db.users.update_one({"id": user["id"]}, {"$set": {"avatar": data.get("picture")}})
+            user["avatar"] = data.get("picture")
+    except Exception as e:
+        # Handle a race where two requests create the same email concurrently, else surface a code.
+        user = await db.users.find_one({"email": email})
+        if not user:
+            log.exception("google user provisioning failed for %s", email)
+            raise HTTPException(status_code=500,
+                                detail=f"USER_PROVISIONING_FAILED: {type(e).__name__}")
     access = create_access_token(user["id"], user["email"])
     _set_cookies(response, access, create_refresh_token(user["id"]))
+    log.info("google login ok email=%s", email)
     return {**_public_user(user), "access_token": access}
+
+
+@router.get("/health")
+async def auth_health():
+    """Non-secret auth health check: env presence, DB reachability, upstream auth reachability."""
+    import httpx
+    out = {"jwt_secret": bool(os.environ.get("JWT_SECRET")),
+           "db": False, "google_auth_upstream": False}
+    try:
+        await get_db().command("ping")
+        out["db"] = True
+    except Exception:
+        pass
+    try:
+        async with httpx.AsyncClient(timeout=8, follow_redirects=True) as client:
+            r = await client.get(
+                "https://demobackend.emergentagent.com/auth/v1/env/oauth/session-data",
+                headers={"X-Session-ID": "healthcheck"})
+        # Any HTTP response (even 4xx for the bogus id) means the endpoint is reachable.
+        out["google_auth_upstream"] = r.status_code < 500
+        out["google_auth_upstream_status"] = r.status_code
+    except Exception as e:
+        out["google_auth_upstream_error"] = type(e).__name__
+    out["ok"] = out["jwt_secret"] and out["db"] and out["google_auth_upstream"]
+    return out
 
 
 async def seed_admin():

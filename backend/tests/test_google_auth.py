@@ -40,7 +40,7 @@ class TestGoogleSessionContract:
         r = client.post(f"{BASE_URL}/api/auth/google/session",
                         json={"session_id": "TEST_invalid_session_abc123"}, timeout=30)
         assert r.status_code == 401, r.text
-        assert r.json().get("detail") == "Invalid session"
+        assert str(r.json().get("detail", "")).startswith("SESSION_INVALID_OR_EXPIRED")
 
     def test_missing_session_id_returns_422(self, client):
         r = client.post(f"{BASE_URL}/api/auth/google/session", json={}, timeout=30)
