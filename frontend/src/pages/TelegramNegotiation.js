@@ -111,7 +111,7 @@ function LinkPanel({ status, onLinked }) {
 
 // ------------------------- New deal form ------------------------- //
 function NewDealForm({ onCreated }) {
-  const [f, setF] = useState({ vendor_username: "", material: "", quantity: "", unit: "",
+  const [f, setF] = useState({ vendor_username: "", vendor_name: "", material: "", quantity: "", unit: "",
     target_price: "", max_price: "", currency: "INR", notes: "" });
   const [err, setErr] = useState("");
   const [busy, setBusy] = useState(false);
@@ -123,6 +123,7 @@ function NewDealForm({ onCreated }) {
     try {
       const { data } = await api.post("/telegram/deals", {
         vendor_username: f.vendor_username.trim(),
+        vendor_name: f.vendor_name.trim() || null,
         material: f.material.trim(),
         quantity: f.quantity ? Number(f.quantity) : null,
         unit: f.unit.trim() || null,
@@ -131,7 +132,7 @@ function NewDealForm({ onCreated }) {
         currency: f.currency,
         notes: f.notes.trim() || null,
       });
-      setF({ vendor_username: "", material: "", quantity: "", unit: "", target_price: "",
+      setF({ vendor_username: "", vendor_name: "", material: "", quantity: "", unit: "", target_price: "",
         max_price: "", currency: "INR", notes: "" });
       onCreated(data);
     } catch (e2) {
@@ -143,10 +144,17 @@ function NewDealForm({ onCreated }) {
     <Card className="p-6 sm:p-8 border border-white/10">
       <SectionLabel>Start a negotiation</SectionLabel>
       <form onSubmit={submit} className="space-y-4">
-        <Input label="Vendor Telegram @username" value={f.vendor_username} onChange={set("vendor_username")}
-          placeholder="@vendorhandle" data-testid="deal-username" required />
+        <div className="grid grid-cols-2 gap-4">
+          <Input label="Vendor @username or phone" value={f.vendor_username} onChange={set("vendor_username")}
+            placeholder="@handle or +9199…" data-testid="deal-username" required />
+          <Input label="Vendor name (optional)" value={f.vendor_name} onChange={set("vendor_name")}
+            placeholder="e.g. Srinivasa Gowda" data-testid="deal-vendor-name" />
+        </div>
+        <div className="text-[11px] text-white/40 -mt-2">
+          Phone numbers must belong to a Telegram account. 10-digit numbers are treated as Indian (+91).
+        </div>
         <Input label="Material / product" value={f.material} onChange={set("material")}
-          placeholder="e.g. 304 stainless steel sheets, 2mm" data-testid="deal-material" required />
+          placeholder="e.g. Kajaria floor tiles" data-testid="deal-material" required />
         <div className="grid grid-cols-2 gap-4">
           <Input label="Quantity" value={f.quantity} onChange={set("quantity")} inputMode="decimal"
             placeholder="500" data-testid="deal-qty" />

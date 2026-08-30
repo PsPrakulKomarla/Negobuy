@@ -23,6 +23,8 @@ from telethon.errors import (
     PhoneNumberInvalidError,
 )
 from telethon.sessions import StringSession
+from telethon.tl.functions.contacts import ImportContactsRequest
+from telethon.tl.types import InputPhoneContact
 
 from db import get_db
 from auth import get_current_user
@@ -394,6 +396,7 @@ async def unlink(user: dict = Depends(get_current_user)):
 # --------------------------------------------------------------------------- #
 class DealBody(BaseModel):
     vendor_username: str = Field(min_length=2)
+    vendor_name: str | None = None
     material: str = Field(min_length=1)
     quantity: float | None = None
     unit: str | None = None
@@ -410,6 +413,42 @@ def _clean_username(u: str) -> str:
     return u.lstrip("@")
 
 
+def _is_phone(v: str) -> bool:
+    d = v.strip().replace(" ", "").replace("-", "")
+    return d.startswith("+") or (d.isdigit() and len(d) >= 10)
+
+
+def _norm_phone(v: str, default_cc: str = "91") -> str:
+    d = v.strip().replace(" ", "").replace("-", "")
+    if d.startswith("+"):
+        return d
+    if d.isdigit() and len(d) == 10:
+        return "+" + default_cc + d
+    return "+" + d
+
+
+async def _resolve_vendor(client, identifier: str, name_hint: str | None):
+    """Resolve a vendor by @username OR phone number (imported as a contact)."""
+    if _is_phone(identifier):
+        phone = _norm_phone(identifier)
+        contact = InputPhoneContact(client_id=0, phone=phone,
+                                    first_name=(name_hint or "Vendor"), last_name="")
+        res = await client(ImportContactsRequest([contact]))
+        if not res.users:
+            raise HTTPException(status_code=404,
+                                detail=f"{phone} is not on Telegram (no account found for this number)")
+        entity = res.users[0]
+        return entity, phone
+    username = _clean_username(identifier)
+    try:
+        entity = await client.get_entity(username)
+    except (UsernameInvalidError, UsernameNotOccupiedError, ValueError):
+        raise HTTPException(status_code=404, detail=f"Telegram user @{username} not found")
+    except Exception:
+        raise HTTPException(status_code=400, detail="Could not resolve that Telegram username")
+    return entity, username
+
+
 @router.post("/deals")
 async def create_deal(body: DealBody, user: dict = Depends(get_current_user)):
     org = user["organization_id"]
@@ -419,18 +458,12 @@ async def create_deal(body: DealBody, user: dict = Depends(get_current_user)):
     if body.max_price < body.target_price:
         raise HTTPException(status_code=400, detail="Maximum price must be >= target price")
 
-    username = _clean_username(body.vendor_username)
-    try:
-        entity = await client.get_entity(username)
-    except (UsernameInvalidError, UsernameNotOccupiedError, ValueError):
-        raise HTTPException(status_code=404, detail=f"Telegram user @{username} not found")
-    except Exception:
-        raise HTTPException(status_code=400, detail="Could not resolve that Telegram username")
+    entity, vendor_ref = await _resolve_vendor(client, body.vendor_username, body.vendor_name)
 
     deal = {
         "id": uuid.uuid4().hex, "organization_id": org, "created_by": user["id"],
-        "vendor_username": username, "vendor_user_id": entity.id,
-        "vendor_display_name": getattr(entity, "first_name", None) or username,
+        "vendor_username": vendor_ref, "vendor_user_id": entity.id,
+        "vendor_display_name": body.vendor_name or getattr(entity, "first_name", None) or vendor_ref,
         "material": body.material, "quantity": body.quantity, "unit": body.unit,
         "currency": body.currency, "target_price": body.target_price, "max_price": body.max_price,
         "notes": body.notes, "status": "ACTIVE", "transcript": [], "ai_turns": 0,
@@ -451,7 +484,7 @@ async def create_deal(body: DealBody, user: dict = Depends(get_current_user)):
     deal["transcript"].append({"role": "ai", "text": msg, "at": _now()})
     await get_db().telegram_deals.insert_one(dict(deal))
     await audit.log_event(org, "telegram_negotiation", actor=user.get("name"),
-                          detail=f"[telegram] opened negotiation with @{username} for {body.material}")
+                          detail=f"[telegram] opened negotiation with {vendor_ref} for {body.material}")
     deal.pop("_id", None)
     return deal
 
