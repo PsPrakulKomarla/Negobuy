@@ -304,6 +304,110 @@ async def _process_inbound(org_id: str, client: TelegramClient, deal_id: str,
         await audit.log_event(org_id, "telegram_negotiation",
                               detail=f"[telegram] {deal.get('vendor_username')} -> {status} "
                                      f"(quote {quoted})")
+        if status != "ACTIVE":
+            await _emit_alert(org_id, client, {**deal, **upd})
+
+
+async def _emit_alert(org_id: str, client, deal: dict):
+    """Real notification: DM the buyer's own Telegram (Saved Messages) + store an alert row."""
+    cur = deal.get("currency") or ""
+    vendor = deal.get("vendor_display_name") or deal.get("vendor_username")
+    if deal.get("status") == "DEAL_REACHED":
+        price = deal.get("agreed_price") or deal.get("latest_quote")
+        emoji, headline = "✅", (f"Deal reached with {vendor} for {deal.get('material')}: "
+                                 f"{cur} {price}/{deal.get('unit') or 'unit'} "
+                                 f"(target {cur} {deal.get('target_price')}).")
+    else:
+        emoji, headline = "❌", (f"No deal with {vendor} for {deal.get('material')} within your "
+                                 f"limit of {cur} {deal.get('max_price')}.")
+    msg = f"{emoji} NegoBuy alert: {headline}"
+    try:
+        await client.send_message("me", msg)
+    except Exception:
+        log.exception("alert self-DM failed org=%s", org_id)
+    try:
+        await get_db().alerts.insert_one({
+            "id": uuid.uuid4().hex, "organization_id": org_id, "deal_id": deal.get("id"),
+            "type": deal.get("status"), "message": headline, "vendor": vendor,
+            "material": deal.get("material"),
+            "price": deal.get("agreed_price") or deal.get("latest_quote"),
+            "read": False, "created_at": _now(),
+        })
+    except Exception:
+        pass
+
+
+@router.get("/alerts")
+async def list_alerts(user: dict = Depends(get_current_user)):
+    return await get_db().alerts.find(
+        {"organization_id": user["organization_id"]}, {"_id": 0}).sort("created_at", -1).to_list(50)
+
+
+@router.post("/deals/{deal_id}/accept")
+async def accept_order(deal_id: str, user: dict = Depends(get_current_user)):
+    """HUMAN APPROVAL GATE: buyer explicitly accepts a vendor's final price and places the order.
+    The AI never does this on its own. Sends a real order confirmation to the vendor."""
+    org = user["organization_id"]
+    db = get_db()
+    deal = await db.telegram_deals.find_one({"id": deal_id, "organization_id": org}, {"_id": 0})
+    if not deal:
+        raise HTTPException(status_code=404, detail="Deal not found")
+    price = deal.get("agreed_price") if deal.get("agreed_price") is not None else deal.get("latest_quote")
+    if price is None:
+        raise HTTPException(status_code=400, detail="No quoted price yet for this vendor")
+    if float(price) > float(deal["max_price"]):
+        raise HTTPException(status_code=400, detail="Quoted price is above your maximum")
+
+    # Atomically claim the deal so concurrent accepts can't create two orders.
+    order_id = uuid.uuid4().hex
+    claimed = await db.telegram_deals.find_one_and_update(
+        {"id": deal_id, "$or": [{"order_id": None}, {"order_id": {"$exists": False}}]},
+        {"$set": {"status": "ORDER_PLACED", "order_id": order_id, "updated_at": _now()}})
+    if not claimed:
+        raise HTTPException(status_code=409, detail="Order already placed for this vendor")
+
+    order = {
+        "id": order_id, "organization_id": org, "deal_id": deal_id,
+        "vendor": deal.get("vendor_display_name") or deal.get("vendor_username"),
+        "vendor_phone": deal.get("vendor_username"),
+        "material": deal.get("material"), "quantity": deal.get("quantity"), "unit": deal.get("unit"),
+        "currency": deal.get("currency"), "price": price,
+        "total": (price * deal["quantity"]) if deal.get("quantity") else None,
+        "source": deal.get("source"), "status": "ACCEPTED",
+        "accepted_by": user["id"], "accepted_by_name": user.get("name"), "accepted_at": _now(),
+    }
+    await db.orders.insert_one(dict(order))
+
+    vendor_notified = False
+    client = clients.get(org)
+    if client:
+        cur = deal.get("currency") or ""
+        confirm = (f"Great — we'd like to confirm the order for {deal.get('quantity') or ''} "
+                   f"{deal.get('unit') or ''} of {deal.get('material')} at {cur} {price}"
+                   f"{('/' + deal['unit']) if deal.get('unit') else ''}. "
+                   "Please share the next steps for payment and delivery.")
+        try:
+            await client.send_message(deal["vendor_user_id"], confirm)
+            vendor_notified = True
+            await db.telegram_deals.update_one(
+                {"id": deal_id}, {"$push": {"transcript": {"role": "ai", "text": confirm, "at": _now()}}})
+        except Exception:
+            log.exception("order confirmation send failed deal=%s", deal_id)
+        try:
+            await client.send_message("me", f"🧾 NegoBuy: order placed with {order['vendor']} "
+                                            f"for {deal.get('material')} at {cur} {price}.")
+        except Exception:
+            pass
+    await audit.log_event(org, "telegram_order", actor=user.get("name"),
+                          detail=f"[order] accepted {order['vendor']} @ {price} for {deal.get('material')}")
+    order.pop("_id", None)
+    return {**order, "vendor_notified": vendor_notified}
+
+
+@router.get("/orders")
+async def list_orders(user: dict = Depends(get_current_user)):
+    return await get_db().orders.find(
+        {"organization_id": user["organization_id"]}, {"_id": 0}).sort("accepted_at", -1).to_list(50)
 
 
 # --------------------------------------------------------------------------- #
@@ -370,14 +474,43 @@ async def link_start(body: LinkStart, user: dict = Depends(get_current_user)):
     clients[org] = client
     login_state[org] = {"phone": body.phone, "phone_code_hash": sent.phone_code_hash,
                         "api_id": body.api_id, "api_hash": body.api_hash}
+    # Persist pending login (incl. Telethon session/auth key) so verify survives a restart.
+    await get_db().telegram_login.update_one(
+        {"organization_id": org},
+        {"$set": {"organization_id": org, "api_id": body.api_id, "api_hash": body.api_hash,
+                  "phone": body.phone, "phone_code_hash": sent.phone_code_hash,
+                  "session": client.session.save(), "created_at": _now()}},
+        upsert=True)
     return {"status": "code_sent"}
+
+
+async def _get_login_client(org: str):
+    """Return (login_state, client) for verify, rebuilding from the persisted pending
+    login if the in-memory state was lost to a restart."""
+    st = login_state.get(org)
+    client = clients.get(org)
+    if st and client:
+        if not client.is_connected():
+            await client.connect()
+        return st, client
+    pend = await get_db().telegram_login.find_one({"organization_id": org}, {"_id": 0})
+    if not pend:
+        return None, None
+    try:
+        client = await _build_client(pend["api_id"], pend["api_hash"], pend.get("session", ""))
+    except Exception:
+        return None, None
+    st = {"phone": pend["phone"], "phone_code_hash": pend["phone_code_hash"],
+          "api_id": pend["api_id"], "api_hash": pend["api_hash"]}
+    clients[org] = client
+    login_state[org] = st
+    return st, client
 
 
 @router.post("/link/verify")
 async def link_verify(body: LinkVerify, user: dict = Depends(get_current_user)):
     org = user["organization_id"]
-    st = login_state.get(org)
-    client = clients.get(org)
+    st, client = await _get_login_client(org)
     if not st or not client:
         raise HTTPException(status_code=409, detail="Start the login first")
     try:
@@ -392,6 +525,7 @@ async def link_verify(body: LinkVerify, user: dict = Depends(get_current_user)):
         raise HTTPException(status_code=400, detail="Invalid login code")
     except PhoneCodeExpiredError:
         login_state.pop(org, None)
+        await get_db().telegram_login.delete_one({"organization_id": org})
         raise HTTPException(status_code=400, detail="Login code expired — start again")
 
     me = await client.get_me()
@@ -404,6 +538,7 @@ async def link_verify(body: LinkVerify, user: dict = Depends(get_current_user)):
                   "username": me.username, "user_id": me.id, "updated_at": _now()}},
         upsert=True)
     login_state.pop(org, None)
+    await db.telegram_login.delete_one({"organization_id": org})
     await _register_handler(org, client)
     return {"status": "authorized", "username": me.username,
             "name": (me.first_name or "") + ((" " + me.last_name) if me.last_name else "")}

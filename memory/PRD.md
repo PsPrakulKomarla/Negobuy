@@ -70,11 +70,36 @@ REACT_APP_BACKEND_URL at start).
   negotiation poller confirmed working (vendor quoted 500, AI countered, quote extracted).
 - Alerts = dashboard live status + best-price banner (no email/SMS yet).
 
-## PENDING (explicitly requested, not yet built)
-- GEMINI provider integration: add backend/ai/ provider abstraction (base/factory/gemini/openai/xai),
-  AI_PROVIDER env switch, GEMINI_API_KEY (AQ. format, verified working with model gemini-3.6-flash via
-  google-genai 2.20.0), GET /api/ai/status. Route ai_service._complete through the active provider.
-  Groundwork done: key+model verified, google-genai installed. NOT wired yet.
+## Orders, Comparison, Default Vendor, Login-persistence fix — Aug 2026 (DONE)
+- BUG FIX: Telegram "Start the login first" after entering code. Root cause: pending login (Telethon
+  session/auth key + phone_code_hash) was in-memory only and wiped by backend restart between
+  /link/start and /link/verify. FIX: persist pending login to Mongo telegram_login in link_start;
+  _get_login_client() rebuilds the client from it in link_verify; row deleted on success/expiry.
+  Verified iteration_15 (18/18) + linked session survived many restarts.
+- HUMAN APPROVAL GATE: POST /api/telegram/deals/{id}/accept — buyer explicitly places the order.
+  Atomic claim (find_one_and_update on order_id null) → creates db.orders row, flips deal to
+  ORDER_PLACED, sends REAL Telegram order-confirmation to vendor, returns {..., vendor_notified}.
+  Guardrails: 404 unknown / 400 no-quote / 400 above-max / 409 already-ordered. GET /api/telegram/orders.
+- FINAL COMPARISON / REVERSE AUCTION: AutoSourcing shows ranked vendor final prices (cheapest first,
+  winner highlighted) + per-vendor "Accept" modal (price, qty, order total, last chat). Errors surfaced
+  (src-accept-error / src-action-error). Telegram tab DealDetail has "Place order @ ..." gate.
+- DEFAULT VENDOR: tile-related sourcing (tile/tiles/kajaria/ceramic/vitrified) always injects
+  "SLV Ceramics (Muddinapalya)" +919980402205 first; non-tile requests never include it.
+- LIVE PROOF: SLV Ceramics negotiation reached ₹420 (<= ₹450 max); order placed at ₹420.
+
+## Gemini active AI provider + Alerts + Reverse Auction — Aug 2026 (DONE)
+- backend/ai/ provider abstraction: base_provider.py (AIProvider ABC), gemini_provider.py
+  (google-genai 2.20 client.aio, GEMINI_MODEL=gemini-3.6-flash, AFC disabled, status states),
+  openai_provider.py (emergentintegrations universal key, LLM_MODEL), xai_provider.py (REST stub,
+  NOT_CONFIGURED), provider_factory.py (AI_PROVIDER switch, default emergent).
+- ai_service._complete()/is_configured() route through get_provider(); ALL ai_service flows now use
+  Gemini. Telegram negotiation stays Claude Sonnet 5 (user choice).
+- GET /api/ai/status {active_provider, providers} (no secrets); /api/system/status reports real provider+model.
+- env: AI_PROVIDER=gemini, GEMINI_API_KEY, GEMINI_MODEL. iteration_14: backend 15/15, no leakage.
+- DEAL ALERTS: _emit_alert() on deal conclusion -> real Telegram DM to buyer's Saved Messages + db.alerts
+  row; GET /api/telegram/alerts. (Email/SMS not wired.)
+- REVERSE AUCTION: AutoSourcing leaderboard ranks vendor quotes cheapest-first, highlights winner.
+- launch() only flips campaign to NEGOTIATING when >=1 deal launched.
 
 ## Telegram AI Negotiator (userbot) — Aug 2026
 - Requirement: reach a vendor by @username and let AI negotiate to a target price, no simulation.

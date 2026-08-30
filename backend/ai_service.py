@@ -1,8 +1,8 @@
-"""AI service layer — GPT-5.6 via Emergent Universal Key. All model calls go through here."""
+"""AI service layer — routes through the pluggable AI provider (AI_PROVIDER). All model calls go through here."""
 import os
 import json
 import re
-from emergentintegrations.llm.chat import LlmChat, UserMessage
+from ai import get_provider
 
 
 def _model():
@@ -10,17 +10,15 @@ def _model():
 
 
 def is_configured() -> bool:
-    return bool(os.environ.get("EMERGENT_LLM_KEY"))
+    try:
+        from ai import get_provider as _gp
+        return _gp().check_provider_status() == "CONFIGURED"
+    except Exception:
+        return bool(os.environ.get("EMERGENT_LLM_KEY"))
 
 
 async def _complete(system: str, prompt: str, session_id: str) -> str:
-    chat = LlmChat(
-        api_key=os.environ["EMERGENT_LLM_KEY"],
-        session_id=session_id,
-        system_message=system,
-    ).with_model("openai", _model())
-    resp = await chat.send_message(UserMessage(text=prompt))
-    return resp if isinstance(resp, str) else str(resp)
+    return await get_provider().generate_response(system, prompt, session_id)
 
 
 def _extract_json(text: str):

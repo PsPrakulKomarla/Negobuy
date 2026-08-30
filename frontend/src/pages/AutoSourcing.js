@@ -12,6 +12,7 @@ import {
 const DEAL_META = {
   ACTIVE: { label: "Negotiating", cls: "text-yellow-300 border-yellow-400/30 bg-yellow-400/10" },
   DEAL_REACHED: { label: "Deal", cls: "text-secondary border-secondary/30 bg-secondary/10" },
+  ORDER_PLACED: { label: "Ordered", cls: "text-secondary border-secondary/40 bg-secondary/15" },
   FAILED: { label: "No Deal", cls: "text-accent border-accent/30 bg-accent/10" },
   STOPPED: { label: "Stopped", cls: "text-white/50 border-white/15 bg-white/5" },
 };
@@ -86,6 +87,9 @@ function CampaignView({ campaignId, onBack }) {
   const [selected, setSelected] = useState({});
   const [launching, setLaunching] = useState(false);
   const [openDeal, setOpenDeal] = useState(null);
+  const [confirmC, setConfirmC] = useState(null);
+  const [accepting, setAccepting] = useState(false);
+  const [actionErr, setActionErr] = useState("");
 
   const load = useCallback(async () => {
     try { const { data } = await api.get(`/sourcing/campaigns/${campaignId}`); setCamp(data); }
@@ -104,13 +108,34 @@ function CampaignView({ campaignId, onBack }) {
   const toggle = (phone) => setSelected((s) => ({ ...s, [phone]: !s[phone] }));
   const anyLaunched = camp.candidates.some((c) => c.deal_id);
 
+  // Reverse auction: rank vendors that have a live quote, cheapest first.
+  const ranked = camp.candidates
+    .filter((c) => (c.agreed_price ?? c.latest_quote) != null)
+    .map((c) => ({ ...c, q: c.agreed_price ?? c.latest_quote }))
+    .sort((a, b) => a.q - b.q);
+
+  const acceptOrder = async () => {
+    if (!confirmC?.deal_id) return;
+    setAccepting(true); setActionErr("");
+    try {
+      await api.post(`/telegram/deals/${confirmC.deal_id}/accept`);
+      setConfirmC(null);
+      await load();
+    } catch (e) {
+      setActionErr(formatApiError(e.response?.data?.detail) || e.message);
+    }
+    finally { setAccepting(false); }
+  };
+
   const launch = async (phones) => {
-    setLaunching(true);
+    setLaunching(true); setActionErr("");
     try {
       await api.post(`/sourcing/campaigns/${campaignId}/launch`, { phones: phones || null });
       await load();
       setSelected({});
-    } catch (e) { /* ignore */ }
+    } catch (e) {
+      setActionErr(formatApiError(e.response?.data?.detail) || e.message);
+    }
     finally { setLaunching(false); }
   };
 
@@ -143,6 +168,80 @@ function CampaignView({ campaignId, onBack }) {
             Link your Telegram account in the <Link to="/telegram" className="text-primary">Telegram AI</Link> tab to message these vendors.
           </div>
         </Card>
+      )}
+
+      {ranked.length > 0 && (
+        <Card className="p-5 border border-primary/20 bg-primary/5 mb-4" data-testid="src-leaderboard">
+          <div className="flex items-center gap-2 mb-3">
+            <TrendingDown size={16} className="text-primary" />
+            <span className="text-xs tracking-[0.25em] uppercase text-primary/80 font-mono">Final Comparison · Reverse Auction</span>
+          </div>
+          <div className="space-y-2">
+            {ranked.map((c, i) => {
+              const winner = i === 0;
+              const ordered = c.deal_status === "ORDER_PLACED";
+              const canAccept = c.deal_id && !ordered;
+              return (
+                <div key={c.phone} data-testid={`src-rank-${i}`}
+                  className={`flex items-center justify-between gap-3 rounded-xl px-4 py-2.5 border ${winner ? "border-secondary/40 bg-secondary/10" : "border-white/10 bg-white/5"}`}>
+                  <div className="flex items-center gap-3 min-w-0">
+                    <span className={`w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold ${winner ? "bg-secondary/25 text-secondary" : "bg-white/10 text-white/50"}`}>{i + 1}</span>
+                    <span className="font-medium truncate">{c.name}</span>
+                    {winner && !ordered && <Badge className="text-secondary border-secondary/30">best</Badge>}
+                    <DealChip status={c.deal_status} />
+                  </div>
+                  <div className="flex items-center gap-3 shrink-0">
+                    <span className={`text-sm font-bold ${winner ? "text-secondary" : "text-yellow-300"}`}>{camp.currency} {c.q}</span>
+                    {canAccept && (
+                      <Button size="sm" variant={winner ? "primary" : "secondary"}
+                        onClick={() => setConfirmC(c)} data-testid={`src-accept-${c.phone}`}>
+                        <CheckCircle2 size={14} /> Accept
+                      </Button>
+                    )}
+                    {ordered && <Badge className="text-secondary border-secondary/40">order placed</Badge>}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+          <p className="text-[11px] text-white/40 mt-3">Nothing is ordered automatically. Review each vendor's final price and chat, then Accept to place the order.</p>
+        </Card>
+      )}
+
+      {confirmC && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm p-4" data-testid="src-accept-modal">
+          <Card className="w-full max-w-lg p-6 border border-white/15">
+            <h3 className="font-display font-bold text-lg mb-1">Confirm order</h3>
+            <p className="text-sm text-white/50 mb-4">You're placing a real order. A confirmation will be sent to the vendor on Telegram.</p>
+            <div className="rounded-xl bg-white/5 border border-white/10 p-4 mb-4 space-y-1 text-sm">
+              <div className="flex justify-between"><span className="text-white/50">Vendor</span><span className="font-medium">{confirmC.name}</span></div>
+              <div className="flex justify-between"><span className="text-white/50">Material</span><span>{camp.material}</span></div>
+              {camp.quantity && <div className="flex justify-between"><span className="text-white/50">Quantity</span><span>{camp.quantity} {camp.unit}</span></div>}
+              <div className="flex justify-between"><span className="text-white/50">Final price</span><span className="font-bold text-secondary">{camp.currency} {confirmC.agreed_price ?? confirmC.latest_quote}{camp.unit ? `/${camp.unit}` : ""}</span></div>
+              {camp.quantity && <div className="flex justify-between"><span className="text-white/50">Order total</span><span className="font-bold">{camp.currency} {((confirmC.agreed_price ?? confirmC.latest_quote) * camp.quantity).toLocaleString()}</span></div>}
+            </div>
+            {confirmC.transcript && confirmC.transcript.length > 0 && (
+              <div className="max-h-40 overflow-y-auto rounded-xl bg-void/60 border border-white/10 p-3 mb-4 space-y-1.5">
+                {confirmC.transcript.slice(-6).map((m, i) => (
+                  <div key={i} className={`text-xs ${m.role === "ai" ? "text-primary/80" : "text-white/70"}`}>
+                    <b>{m.role === "ai" ? "You" : "Vendor"}:</b> {m.text}
+                  </div>
+                ))}
+              </div>
+            )}
+            {actionErr && <div className="text-sm text-accent bg-accent/10 border border-accent/20 rounded-xl px-4 py-2.5 mb-3" data-testid="src-accept-error">{actionErr}</div>}
+            <div className="flex gap-3">
+              <Button variant="ghost" onClick={() => { setConfirmC(null); setActionErr(""); }} data-testid="src-accept-cancel">Cancel</Button>
+              <Button className="flex-1" onClick={acceptOrder} disabled={accepting} data-testid="src-accept-confirm">
+                {accepting ? <Spinner /> : <CheckCircle2 size={16} />} Confirm & place order
+              </Button>
+            </div>
+          </Card>
+        </div>
+      )}
+
+      {actionErr && !confirmC && (
+        <div className="text-sm text-accent bg-accent/10 border border-accent/20 rounded-xl px-4 py-2.5 mb-4" data-testid="src-action-error">{actionErr}</div>
       )}
 
       {camp.telegram_linked && reachable.length > 0 && !anyLaunched && (

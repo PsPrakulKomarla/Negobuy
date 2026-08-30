@@ -63,14 +63,25 @@ async def root():
     return {"service": "NegoBuy API", "status": "online"}
 
 
+@core.get("/ai/status")
+async def ai_status(user: dict = Depends(get_current_user)):
+    from ai import provider_status, active_provider_name
+    return {"active_provider": active_provider_name(), "providers": provider_status()}
+
+
 @core.get("/system/status")
 async def system_status(user: dict = Depends(get_current_user)):
     razorpay = ("LIVE" if os.environ.get("RAZORPAY_KEY_ID", "").startswith("rzp_live")
                 else "TEST" if os.environ.get("RAZORPAY_KEY_ID") else "NOT_CONFIGURED")
+    from ai import active_provider_name
+    _prov = active_provider_name()
+    _ai_model = (os.environ.get("GEMINI_MODEL") if _prov == "gemini"
+                 else os.environ.get("XAI_MODEL") if _prov == "xai"
+                 else os.environ.get("LLM_MODEL"))
     return {
         "ai": {"state": "CONFIGURED" if ai_service.is_configured() else "NOT_CONFIGURED",
-               "configured": ai_service.is_configured(), "model": os.environ.get("LLM_MODEL"),
-               "provider": "openai"},
+               "configured": ai_service.is_configured(), "model": _ai_model,
+               "provider": _prov},
         "discovery": {"state": "CONFIGURED", "configured": discovery.search_configured(),
                       "has_key": discovery.has_search_key(), "provider": "tavily"},
         "email": {"state": "CONFIGURED" if email_configured() else "NOT_CONFIGURED",

@@ -8,6 +8,7 @@ import {
 const STATUS_META = {
   ACTIVE: { label: "Negotiating", cls: "text-yellow-300 border-yellow-400/30 bg-yellow-400/10" },
   DEAL_REACHED: { label: "Deal Reached", cls: "text-secondary border-secondary/30 bg-secondary/10" },
+  ORDER_PLACED: { label: "Order Placed", cls: "text-secondary border-secondary/40 bg-secondary/15" },
   FAILED: { label: "No Deal", cls: "text-accent border-accent/30 bg-accent/10" },
   STOPPED: { label: "Stopped", cls: "text-white/50 border-white/15 bg-white/5" },
 };
@@ -211,6 +212,17 @@ function DealDetail({ dealId, onClose }) {
     load();
   };
 
+  const [accepting, setAccepting] = useState(false);
+  const onAccept = async () => {
+    if (!window.confirm(`Place the order with this vendor at ${deal.currency} ${deal.agreed_price ?? deal.latest_quote}? A confirmation will be sent to them on Telegram.`)) return;
+    setAccepting(true);
+    try {
+      await api.post(`/telegram/deals/${dealId}/accept`);
+      await load();
+    } catch (e) { window.alert(formatApiError(e.response?.data?.detail) || e.message); }
+    finally { setAccepting(false); }
+  };
+
   if (!deal) return <Card className="p-8 flex justify-center"><Spinner className="w-6 h-6" /></Card>;
 
   const cur = deal.currency || "";
@@ -251,9 +263,23 @@ function DealDetail({ dealId, onClose }) {
           <CheckCircle2 size={16} /> Deal reached at {cur} {deal.agreed_price ?? deal.latest_quote}.
         </div>
       )}
+      {deal.status === "ORDER_PLACED" && (
+        <div className="bg-secondary/15 border-y border-secondary/30 px-5 py-3 flex items-center gap-2 text-secondary text-sm" data-testid="deal-outcome">
+          <CheckCircle2 size={16} /> Order placed at {cur} {deal.agreed_price ?? deal.latest_quote}.
+        </div>
+      )}
       {deal.status === "FAILED" && (
         <div className="bg-accent/10 border-y border-accent/20 px-5 py-3 flex items-center gap-2 text-accent text-sm" data-testid="deal-outcome">
           <XCircle size={16} /> No deal reached within your limits.
+        </div>
+      )}
+
+      {deal.latest_quote != null && deal.status !== "ORDER_PLACED" && (
+        <div className="bg-white/5 border-y border-white/10 px-5 py-3 flex items-center justify-between gap-3">
+          <span className="text-xs text-white/50">Review the price &amp; chat, then place the order (nothing is ordered automatically).</span>
+          <Button size="sm" onClick={onAccept} disabled={accepting} data-testid="deal-accept-btn">
+            {accepting ? <Spinner /> : <CheckCircle2 size={14} />} Place order @ {cur} {deal.agreed_price ?? deal.latest_quote}
+          </Button>
         </div>
       )}
 

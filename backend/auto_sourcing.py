@@ -40,6 +40,30 @@ def _norm_in_mobile(raw: str):
     return None
 
 
+# Preferred default vendors that MUST be contacted for certain categories (demo/seed data).
+DEFAULT_TILE_VENDOR = {
+    "name": "SLV Ceramics (Muddinapalya)", "phone": "+919980402205",
+    "location": "Muddinapalya, Bengaluru", "url": None,
+    "note": "Preferred tiles vendor (always contacted for tile requirements).",
+    "default": True,
+}
+_TILE_KEYWORDS = ("tile", "tiles", "kajaria", "ceramic", "vitrified")
+
+
+def _is_tiles(material: str) -> bool:
+    m = (material or "").lower()
+    return any(k in m for k in _TILE_KEYWORDS)
+
+
+def _default_vendors(material: str) -> list:
+    vendors = []
+    if _is_tiles(material):
+        vendors.append({**DEFAULT_TILE_VENDOR, "telegram_reachable": None,
+                        "telegram_user_id": None, "telegram_name": None,
+                        "deal_id": None, "status": "FOUND"})
+    return vendors
+
+
 class DiscoverBody(BaseModel):
     material: str = Field(min_length=2)
     specs: str | None = None
@@ -82,8 +106,11 @@ async def discover(body: DiscoverBody, user: dict = Depends(get_current_user)):
     session = f"sourcing-{uuid.uuid4().hex[:8]}"
     raw_vendors = await ai_service.extract_vendors(body.material, body.location, hits, session)
 
-    # 3) Normalize + dedup phones.
+    # 3) Normalize + dedup phones. Tiles requests always include a preferred default vendor.
     candidates, phones_seen = [], set()
+    for dv in _default_vendors(body.material):
+        candidates.append(dv)
+        phones_seen.add(dv["phone"])
     for v in raw_vendors:
         e164 = _norm_in_mobile(str(v.get("phone", "")))
         if not e164 or e164 in phones_seen:
@@ -176,7 +203,9 @@ async def launch(campaign_id: str, body: LaunchBody, user: dict = Depends(get_cu
 
     await db.sourcing_campaigns.update_one(
         {"id": campaign_id},
-        {"$set": {"candidates": candidates, "status": "NEGOTIATING", "updated_at": _now()}})
+        {"$set": {"candidates": candidates,
+                  "status": "NEGOTIATING" if launched else camp.get("status", "DISCOVERED"),
+                  "updated_at": _now()}})
     return {"launched": launched, "skipped": skipped, "count": len(launched)}
 
 
