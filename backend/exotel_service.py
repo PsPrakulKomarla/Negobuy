@@ -129,11 +129,9 @@ async def place_outbound_call(to_number: str, status_callback_url: str,
     url = f"https://{sub}/v1/Accounts/{sid}/Calls/connect.json"
 
     data = {
-        "To": to_number,
         "CallerId": caller_id(),
         "CallType": "trans",
         "StatusCallback": status_callback_url,
-        "StatusCallbackEvents[0]": "terminal",
         "CustomField": custom_field,
         "Record": "true" if record else "false",
     }
@@ -141,9 +139,16 @@ async def place_outbound_call(to_number: str, status_callback_url: str,
     app_id = os.environ.get("EXOTEL_APP_ID")
     agent = os.environ.get("EXOTEL_AGENT_NUMBER")
     if app_id:
+        # App-flow (Voicebot) mode: Exotel dials `From` (the supplier) and runs the app,
+        # whose Voicebot applet streams audio to our bridge. There is no separate `To`.
+        data["From"] = to_number
         data["Url"] = f"http://my.exotel.com/{sid}/exoml/start_voice/{app_id}"
     elif agent:
+        # Agent-bridge mode: dial the agent first, then connect to the supplier.
         data["From"] = agent
+        data["To"] = to_number
+    else:
+        data["To"] = to_number
     stream = os.environ.get("EXOTEL_STREAM_URL")
     if stream:
         data["StreamUrl"] = stream
