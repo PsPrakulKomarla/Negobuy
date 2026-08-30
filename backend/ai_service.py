@@ -394,6 +394,156 @@ clearly flagging it. Return ONLY valid JSON with BOTH the legacy keys and the ri
 }"""
 
 
+CALL_ANALYSIS_SYSTEM = NEGOTIATION_PERSONA + """
+
+==== POST-CALL ANALYSIS CONTRACT ====
+The phone conversation has ENDED. You are now reviewing the transcript for the human buyer.
+Analyze ONLY what actually appears in the transcript. Never invent prices, terms, commitments
+or supplier statements. If something was not said, mark it UNCLEAR — do not guess.
+You did NOT finalize anything: no order was placed, nothing is "confirmed as a deal".
+Every commercial term stays PROPOSED until a human approves it.
+
+Label every extracted term with exactly one status:
+- CONFIRMED: the supplier clearly stated this as a firm, current fact/offer in the call.
+- PROPOSED: mentioned or offered but not firmly locked / still conditional.
+- UNCLEAR: touched on but ambiguous, or not stated.
+- REQUIRES_HUMAN_APPROVAL: outside the buyer's authorized limits, or a binding decision the AI could not make.
+
+Do NOT expose private chain-of-thought. Give concise, evidence-based summaries only.
+Return ONLY valid JSON:
+{
+  "summary": string (2-3 sentences, plain language, e.g. "Supplier offered to reduce unit price from X to Y for the requested quantity. Delivery stays 12 days. They asked for advance payment, which is outside the approved payment preference."),
+  "negotiation_result": "IMPROVED"|"NO_MOVEMENT"|"WORSE"|"INCONCLUSIVE",
+  "price": { "original": number|null, "new": number|null, "final_discussed": number|null, "currency": string|null },
+  "price_improvement_pct": number|null,
+  "terms": [ { "field": string, "value": string, "status": "CONFIRMED"|"PROPOSED"|"UNCLEAR"|"REQUIRES_HUMAN_APPROVAL" } ],
+  "key_terms": [string],
+  "supplier_objections": [string],
+  "supplier_commitments": [string],
+  "ai_commitments": [string],
+  "unresolved_issues": [string],
+  "risks": [string],
+  "differences_from_requirements": [string],
+  "proposed_supplier_terms": { "unit_price": number|null, "quantity": number|null, "delivery_days": number|null, "warranty": string|null, "payment_terms": string|null, "shipping": string|null, "taxes": string|null, "additional_charges": string|null },
+  "self_review": {
+     "what_was_discussed": string,
+     "what_changed": string,
+     "what_ai_agreed_to_discuss": string,
+     "what_requires_human_approval": string,
+     "recommended_next_step": string
+  },
+  "recommended_next_action": "APPROVE_NEXT_STEP"|"REQUEST_CHANGES"|"CONTINUE_NEGOTIATION"|"REJECT"|"INSUFFICIENT_INFORMATION",
+  "requires_human_approval": boolean,
+  "within_authority": boolean
+}
+The 'terms' list should cover, where discussed: price, quantity, delivery, shipping, warranty, payment terms, taxes, additional charges."""
+
+
+def _fmt_transcript(transcript: list) -> str:
+    if not transcript:
+        return "(no transcript captured)"
+    lines = []
+    for t in transcript:
+        who = (t.get("speaker") or t.get("role") or "?").upper()
+        ts = t.get("timestamp") or t.get("ts") or ""
+        lines.append(f"[{ts}] {who}: {t.get('text', '')}")
+    return "\n".join(lines)
+
+
+async def analyze_call(objective: dict, authority: dict, transcript: list,
+                       session_id: str) -> dict:
+    """Post-call analysis reusing the shared negotiation brain. Never commits a deal."""
+    prompt = f"""CALL OBJECTIVE:
+{json.dumps(objective or {}, default=str, indent=2)}
+
+NEGOTIATION AUTHORITY (backend source of truth — read only):
+max_unit_price={authority.get('max_price_per_unit')}, target={authority.get('target_price_per_unit')}, currency={authority.get('currency')}, quantity={authority.get('quantity')}, max_delivery_days={authority.get('max_delivery_days')}, min_warranty={authority.get('min_warranty')}
+
+FULL CALL TRANSCRIPT:
+{_fmt_transcript(transcript)}
+
+Analyze this completed call now. Report strictly what the transcript supports."""
+    raw = await _complete(CALL_ANALYSIS_SYSTEM, prompt, session_id)
+    try:
+        result = _extract_json(raw)
+    except Exception:
+        result = {
+            "summary": "The call analysis could not be generated automatically. Please review the transcript.",
+            "negotiation_result": "INCONCLUSIVE", "price": {},
+            "price_improvement_pct": None, "terms": [], "key_terms": [],
+            "supplier_objections": [], "supplier_commitments": [], "ai_commitments": [],
+            "unresolved_issues": ["Automated analysis unavailable"], "risks": [],
+            "differences_from_requirements": [], "proposed_supplier_terms": {},
+            "self_review": {"what_was_discussed": "", "what_changed": "",
+                            "what_ai_agreed_to_discuss": "", "what_requires_human_approval": "",
+                            "recommended_next_step": "Review the transcript manually."},
+            "recommended_next_action": "INSUFFICIENT_INFORMATION",
+            "requires_human_approval": True, "within_authority": True}
+    # Server-side authority clamp on the analyzed price — never green-light above the max.
+    mx = authority.get("max_price_per_unit")
+    fp = (result.get("price") or {}).get("final_discussed")
+    try:
+        if mx is not None and fp not in (None, "") and float(fp) > float(mx):
+            result["within_authority"] = False
+            result["requires_human_approval"] = True
+    except Exception:
+        pass
+    return result
+
+
+NEGOTIATION_PLAN_SYSTEM = NEGOTIATION_PERSONA + """
+
+==== NEGOTIATION PLAN CONTRACT ====
+Before any call, produce a clear, honest negotiation PLAN for the human buyer to review.
+Do not invent requirements the buyer did not give. Keep the AUTHORITY limits exactly as provided.
+Return ONLY valid JSON:
+{
+  "primary_objective": string,
+  "secondary_objectives": [string],
+  "key_questions": [string],
+  "strategy": string (2-3 sentences, plain, no private chain-of-thought),
+  "delivery_questions": [string],
+  "payment_questions": [string],
+  "risks": [string],
+  "opening_line": string (the natural AI disclosure + purpose to say first)
+}"""
+
+
+async def negotiation_plan(mission: dict, vendor: dict, authority: dict,
+                           session_id: str) -> dict:
+    system = NEGOTIATION_PLAN_SYSTEM
+    constraints = {"max_price": authority.get("max_price_per_unit"),
+                   "target_price": authority.get("target_price_per_unit"),
+                   "max_delivery_days": authority.get("max_delivery_days"),
+                   "min_warranty": authority.get("min_warranty")}
+    system = build_agent_prompt(mission, vendor, constraints) + NEGOTIATION_PLAN_SYSTEM[len(NEGOTIATION_PERSONA):]
+    prompt = f"""BUILD THE NEGOTIATION PLAN.
+Product/service: {mission.get('title')} — {mission.get('description') or ''}
+Quantity: {mission.get('quantity')} {mission.get('unit') or ''}
+Authority: target={authority.get('target_price_per_unit')}, max_authorized={authority.get('max_price_per_unit')} {authority.get('currency')}, delivery<= {authority.get('max_delivery_days')} days, warranty>= {authority.get('min_warranty')}
+Deliver to: {mission.get('delivery_location')}
+Special instructions: {mission.get('special_instructions') or 'none'}
+
+Produce the plan now."""
+    raw = await _complete(system, prompt, session_id)
+    try:
+        return _extract_json(raw)
+    except Exception:
+        return {"primary_objective": f"Negotiate the best overall terms for {mission.get('title')}.",
+                "secondary_objectives": ["Confirm delivery", "Confirm taxes and shipping",
+                                         "Understand payment terms"],
+                "key_questions": ["What is your best price for this quantity?",
+                                  "Is there a volume discount?", "What is the lead time?"],
+                "strategy": "Understand the current offer, explore flexibility on price and terms, "
+                            "and summarize for human approval. Never exceed the authorized maximum.",
+                "delivery_questions": ["What are the delivery charges?",
+                                       "Are loading and unloading charges included?"],
+                "payment_questions": ["What are the payment terms?"],
+                "risks": ["Supplier may hold firm above target."],
+                "opening_line": ("Hi, I'm NegoBuy's AI procurement assistant, calling on behalf of a "
+                                 "buyer to discuss a potential purchase. Is this a good time to talk?")}
+
+
 async def recommend(mission: dict, offers: list, session_id: str) -> dict:
     offers_desc = json.dumps([{
         "offer_id": o["id"], "vendor": o.get("vendor_name"),

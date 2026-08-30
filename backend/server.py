@@ -28,6 +28,8 @@ from payments import router as payments_router, webhook_router as razorpay_webho
 from telephony import router as telephony_router
 from exotel_service import router as exotel_router, live_status as exotel_live_status
 from negotiation_engine import router as negotiation_engine_router
+from call_center import router as call_center_router
+from direct_negotiation import router as direct_negotiation_router
 from assurance import router as assurance_router
 from mission_orchestrator import router as orchestrator_router
 from landed_cost import compute_landed_cost
@@ -409,7 +411,9 @@ async def compare(mission_id: str, user: dict = Depends(get_current_user)):
         except Exception:
             recommendation = None
     if not recommendation:
-        best = min(offers, key=lambda o: o["total_cost"])
+        eligible = [o for o in offers if o.get("within_authority", True)
+                    and o.get("status") != "OUT_OF_AUTHORITY"] or offers
+        best = min(eligible, key=lambda o: o["total_cost"])
         recommendation = {"recommended_offer_id": best["id"], "recommendation_score": 60,
                           "reasoning": "Lowest total landed cost.", "risks": [], "ranking": []}
 
@@ -603,6 +607,8 @@ app.include_router(razorpay_webhook_router)
 app.include_router(telephony_router)
 app.include_router(exotel_router)
 app.include_router(negotiation_engine_router)
+app.include_router(call_center_router)
+app.include_router(direct_negotiation_router)
 app.include_router(assurance_router)
 app.include_router(orchestrator_router)
 

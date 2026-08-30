@@ -13,6 +13,9 @@ import Missions from "./pages/Missions";
 import NewMission from "./pages/NewMission";
 import MissionDetail from "./pages/MissionDetail";
 import VoiceCall from "./pages/VoiceCall";
+import CallConsole from "./pages/CallConsole";
+import CallReview from "./pages/CallReview";
+import DirectNegotiation from "./pages/DirectNegotiation";
 import Pricing from "./pages/Pricing";
 import Team from "./pages/Team";
 import AcceptInvite from "./pages/AcceptInvite";
@@ -64,8 +67,11 @@ export default function App() {
             <Route path="/dashboard" element={<Dashboard />} />
             <Route path="/missions" element={<Missions />} />
             <Route path="/missions/new" element={<NewMission />} />
+            <Route path="/direct" element={<DirectNegotiation />} />
             <Route path="/missions/:id" element={<MissionDetail />} />
             <Route path="/missions/:id/call/:vendorId" element={<VoiceCall />} />
+            <Route path="/missions/:id/call-console/:vendorId" element={<CallConsole />} />
+            <Route path="/missions/:id/call-review/:ref" element={<CallReview />} />
             <Route path="/team" element={<Team />} />
             <Route path="/plans" element={<Pricing embedded />} />
           </Route>
