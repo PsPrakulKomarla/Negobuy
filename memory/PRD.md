@@ -173,3 +173,15 @@ REACT_APP_BACKEND_URL at start).
 - NOTE: live Telegram negotiation requires the org to LINK its Telegram userbot account in the
   "Telegram AI" tab (api_id/api_hash/phone + OTP). Until linked, vendors show but cannot be messaged.
 - Tested: iteration_18 (14/14 backend + frontend E2E). Removed stale iteration_15 default test.
+
+## Fixed (2026-08-30) — "Google sign-in failed" (recurring)
+- ROOT CAUSE: React StrictMode remounts AuthCallback; its useRef guard was recreated on the
+  2nd mount, so the ONE-TIME session_id was POSTed to /api/auth/google/session TWICE. Upstream
+  (demobackend .../oauth/session-data) consumed it on call #1 and returned 404
+  "user_data_not_found / User data not found or expired" on call #2 → surfaced as "Google sign-in failed".
+- FIX: (1) AuthCallback.js now guards with a MODULE-LEVEL Set keyed by session_id (survives
+  StrictMode remount) → exchange runs exactly once (entry removed on failure so retry still works).
+  (2) Backend google_session is now idempotent — caches a successful exchange by session_id (~5 min),
+  follows redirects, logs upstream status/body, and returns 502 (not 500) on network error.
+- Verified iteration_19: Playwright confirmed EXACTLY 1 POST to /google/session under StrictMode
+  (previously 2); graceful 401 on bad session; email-auth regression 13/13 green.

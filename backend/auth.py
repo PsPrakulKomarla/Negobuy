@@ -219,18 +219,57 @@ class SessionBody(BaseModel):
     session_id: str
 
 
+# Short-lived cache so a duplicated exchange of the SAME single-use session_id still
+# succeeds (Emergent session_ids are one-time; a StrictMode remount / double POST would
+# otherwise get an upstream rejection on the 2nd call). Keyed by session_id.
+_gsession_cache: dict = {}
+_GSESSION_TTL = 300  # seconds
+
+
+def _gcache_get(sid: str):
+    import time
+    item = _gsession_cache.get(sid)
+    if not item:
+        return None
+    if item[0] < time.time():
+        _gsession_cache.pop(sid, None)
+        return None
+    return item[1]
+
+
+def _gcache_put(sid: str, data: dict):
+    import time
+    _gsession_cache[sid] = (time.time() + _GSESSION_TTL, data)
+
+
 @router.post("/google/session")
 async def google_session(body: SessionBody, response: Response):
     import httpx
-    async with httpx.AsyncClient(timeout=15) as client:
-        r = await client.get(
-            "https://demobackend.emergentagent.com/auth/v1/env/oauth/session-data",
-            headers={"X-Session-ID": body.session_id})
-    if r.status_code != 200:
-        raise HTTPException(status_code=401, detail="Invalid session")
-    data = r.json()
-    if not data.get("email"):
-        raise HTTPException(status_code=401, detail="Invalid session")
+    import logging
+    log = logging.getLogger("google-auth")
+    data = _gcache_get(body.session_id)
+    if data is None:
+        try:
+            async with httpx.AsyncClient(timeout=20, follow_redirects=True) as client:
+                r = await client.get(
+                    "https://demobackend.emergentagent.com/auth/v1/env/oauth/session-data",
+                    headers={"X-Session-ID": body.session_id})
+        except Exception as e:
+            log.exception("google session-data request failed")
+            raise HTTPException(status_code=502, detail=f"Auth service unreachable: {type(e).__name__}")
+        if r.status_code != 200:
+            log.error("google session exchange failed status=%s body=%s",
+                      r.status_code, (r.text or "")[:500])
+            raise HTTPException(status_code=401, detail="Invalid session")
+        try:
+            data = r.json()
+        except Exception:
+            log.error("google session-data non-JSON body=%s", (r.text or "")[:500])
+            raise HTTPException(status_code=401, detail="Invalid session")
+        if not data.get("email"):
+            log.error("google session-data missing email: keys=%s", list(data.keys()))
+            raise HTTPException(status_code=401, detail="Invalid session")
+        _gcache_put(body.session_id, data)
     db = get_db()
     email = data["email"].lower()
     user = await db.users.find_one({"email": email})

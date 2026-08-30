@@ -1,0 +1,23 @@
+{
+  "summary": "Verified StrictMode double-consume fix for Emergent Google OAuth callback. Playwright intercepted network requests while navigating to /dashboard#session_id=probe_test_123 and observed EXACTLY 1 POST to /api/auth/google/session (previously 2). Backend returns graceful 401 on bogus session_id, callback shows failure state and auto-redirects to /login within ~2s. Google outbound redirect points to auth.emergentagent.com/oauth/. Email/password regression fully green: 13/13 pytest cases pass (login → access_token, /me valid/invalid, google_session invalid graceful 401, minted JWT accepted, receipts). UI email login lands on /dashboard.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/test_receipts_and_auth.py",
+    "/app/test_reports/pytest/receipts_and_auth.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "AuthCallback.js uses module-level Set to guard session_id — correct pattern for StrictMode idempotency; entry is deleted on catch so a retry after failure is still possible.",
+    "Backend google/session caches successful exchanges for ~5 min (idempotent) and returns 401 on invalid, 502 on network error — matches spec.",
+    "Google outbound URL correctly built from window.location.origin with no hardcoded redirect fallback (per auth_testing.md warning)."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "100% (13/13)", "frontend": "100% (4/4 critical checks)"},
+  "test_credentials": "admin@negobuy.ai / NegoBuy@2026 (from /app/memory/test_credentials.md)",
+  "seed_data_creation": "None — admin auto-seeded on startup.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "The critical proof for this iteration: instrument page.on('request') filtering '/api/auth/google/session' and navigate to /dashboard#session_id=<any>. Must observe EXACTLY 1 POST despite React.StrictMode. Fix implemented via module-level Set(sid) in AuthCallback.js. Backend graceful invalid path returns 401 (accepted set: 400/401/502).",
+  "rca of the issue": "Original: React.StrictMode double-mounts components in dev; the useRef guard in AuthCallback got a fresh instance on the 2nd mount, so /api/auth/google/session was POSTed twice with the same single-use session_id. Upstream (demobackend.emergentagent.com/auth/v1/env/oauth/session-data) consumed the id on the 1st call, returned 404 user_data_not_found on the 2nd, and the surface error was 'Google sign-in failed'. Mitigation verified: (1) module-level Set survives StrictMode remount; (2) backend also caches a successful exchange for ~5 min so even a race can't double-fail. Playwright confirmed exactly 1 network call in dev-mode StrictMode."
+}
