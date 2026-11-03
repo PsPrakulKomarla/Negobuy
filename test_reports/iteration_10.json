@@ -1,0 +1,62 @@
+{
+  "summary": "Full independent validation of the new Call Center feature (/api/voice/console + CallConsole/CallReview/CallHistory). Backend: 34 pytest tests across 3 new suites — all PASS (config creation + authority freeze + disclosure script, phone-number validation, org isolation 404, explicit-approval TEST simulation producing transcript+analysis, double-approve 400, analyze with/without transcript, session/history shape, outcome gate with 4 decisions + invalid 400, LIVE-mode honest failure, webhook token 401s, webhook happy-path with correct token, authority immutability via webhook, transcript push, idempotent status-callback, offer mirror flagging). Additionally proved the authority clamp directly via ai_service.analyze_call with a transcript at INR 61 vs max 56 -> within_authority=false, requires_human_approval=true, unit price term labelled REQUIRES_HUMAN_APPROVAL. Frontend: complete E2E Playwright run (login -> mission -> exotel-call-{vendorId} -> Call Test Console -> review panel -> Start AI Test Call -> Call Review Center -> Approve next step -> mission Call History -> reopen review) all PASS. No 500s, no console errors, no broken selectors. Nothing auto-created a purchase/order; mission stayed at REQUIREMENT_REVIEW.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "POST /api/voice/console/status-callback", "issue": "Accepts a terminal status for a call that was never approved/placed. A CONFIGURED (approved=false, call_sid=null) session was transitioned to status='completed' with duration=42 by a single token-authenticated webhook. Suggest rejecting/ignoring callbacks for sessions where approved is false or call_sid is null so an unapproved call can never appear as a completed call."},
+      {"endpoint": "POST /api/voice/console/voice-start", "issue": "Same class of issue — sets status='connected' and RECORDING_ACTIVE on an unapproved CONFIGURED session. Should require approved=true."},
+      {"endpoint": "POST /api/voice/console/config", "issue": "No validation that target_price <= max_authorized_price (or that either is > 0). A config with target 90 / max 50 is accepted and frozen as authority. Recommend a 400 on inverted/negative authority."},
+      {"endpoint": "POST /api/voice/console/outcome/{ref}", "issue": "Outcome can be recorded on a CONFIGURED call that has no transcript/analysis, and can be overwritten repeatedly (APPROVE_NEXT then REJECT both accepted, last write wins, no decision history array). Consider requiring a terminal status and appending to an outcome_history."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "Call Review Center (CallReview.js)", "issues": [
+        "analysis.within_authority / requires_human_approval are never rendered. In the verified run the final discussed price was INR 64.5 against a max authorized of INR 56 (offer stored as OUT_OF_AUTHORITY), yet the summary card only showed neutral/positive badges — a green-toned '17.31% improvement' and 'FINAL DISCUSSED INR 64.5'. Add an explicit red 'EXCEEDS MAX AUTHORIZED / REQUIRES HUMAN APPROVAL' banner and suppress/recolour the improvement badge when within_authority is false. This is the most user-visible trust gap in the feature.",
+        "The 4 approval-gate buttons record a decision on first click with no confirm step, and once set the gate collapses to a read-only line with no way to change/see history even though the API allows overwriting."
+      ]},
+      {"screen": "Mission detail — offers/comparison", "issues": [
+        "within_authority / OUT_OF_AUTHORITY is not surfaced anywhere in the frontend (grep found zero references), so the voice-call offer at INR 64.5 (> max 56) appears as an ordinary offer. The offer is also simulation=true but the UI does not label it as simulated in the offers list."
+      ]},
+      {"screen": "Call Test Console", "issues": [
+        "During a TEST call the page stays on the dimmed approval panel for ~40s with only a small spinner in the button; no progress/step indicator ('connecting -> negotiating -> analysing'). Users may think it hung."
+      ]}
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_call_center.py",
+    "/app/backend/tests/test_call_webhooks.py",
+    "/app/backend/tests/test_call_offer_mirror.py",
+    "/app/backend/tests/test_call_authority_clamp.py",
+    "/app/test_reports/pytest/call_center.xml"
+  ],
+  "action_items": [
+    "CallReview.js: render analysis.within_authority === false / requires_human_approval as a prominent warning banner and stop showing a positive 'improvement' badge for an above-max price.",
+    "Surface within_authority/OUT_OF_AUTHORITY and simulation flags on the mission offers list; consider excluding or hard-flagging OUT_OF_AUTHORITY offers in POST /api/missions/{id}/compare (it currently picks min landed cost across ALL offers, so a voice-call price above the authorized max can be recommended).",
+    "Guard /status-callback and /voice-start so they only mutate sessions where approved is true (and ideally call_sid matches).",
+    "Validate authority in POST /config (target_price <= max_authorized_price, non-negative).",
+    "Optional: add progress states to the Call Test Console during the ~40s simulation."
+  ],
+  "critical_code_review_comments": [
+    "compare() in server.py aggregates every offer for a mission with no authority filter; _persist_offer_from_analysis now injects SIMULATED voice-call prices into that same collection. A simulated, out-of-authority price is therefore eligible to be recommended for approval. Filter by within_authority (and simulation) or clearly rank it last.",
+    "Authority freezing itself is implemented correctly: _authority_from_objective is computed server-side at config time, webhooks only read it, and a webhook payload attempting max_authorized_price=99999 did not change the stored authority (verified).",
+    "LIVE mode is honest: approve returned status='failed' (Exotel rejected the call) with no transcript, no analysis and no offer — no fake success.",
+    "status_callback's idempotency key is a boolean terminal_recorded flag rather than the CallSid, so a legitimate later callback for a *retried* call on the same session_ref would be dropped as 'duplicate'. Minor, but keying on CallSid would be safer.",
+    "call_center.py is 585 lines — acceptable now, but the simulation + offer-mirror helpers would be better in their own module before it grows further."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_call_center.py",
+    "/app/backend/tests/test_call_webhooks.py",
+    "/app/backend/tests/test_call_offer_mirror.py",
+    "/app/backend/tests/test_call_authority_clamp.py"
+  ],
+  "success_rate": {"backend": "100% (34/34 pytest, plus 1/1 direct analyze_call clamp test)", "frontend": "100% of the requested E2E flow steps passed"},
+  "seed_data_creation": "Reused existing mission b983bb2f74bd44f29685978e16251d93 / vendor 3a7c1a1bc7fd486599d696c7674c2177. Created several voice_calls documents (TEST_ prefixed suppliers/instructions) including one completed simulated call, one LIVE failed call, and one webhook fixture call. One voice_call offer (INR 64.5, OUT_OF_AUTHORITY) exists on that mission from the simulated call. No missions/vendors/users created or modified.",
+  "should_call_test_agent_after_fix": true,
+  "should_main_agent_self_test": false,
+  "test_credentials": "admin@negobuy.ai / NegoBuy@2026 (from /app/memory/test_credentials.md)",
+  "context_for_next_testing_agent": "New suites: tests/test_call_center.py (27 tests, ~65s — the simulation fixture makes several LLM calls, keep timeouts >=240s), tests/test_call_webhooks.py (needs EXOTEL_WEBHOOK_TOKEN from backend/.env), tests/test_call_offer_mirror.py, tests/test_call_authority_clamp.py (direct ai_service call, loads /app/backend/.env). All 34 pass as of this iteration. Every review-request bullet was covered and passed; the only open items are the UI not surfacing within_authority/requires_human_approval, compare() not filtering OUT_OF_AUTHORITY offers, and webhooks being able to advance an unapproved session. Do NOT re-run LIVE mode more than once (fails at Exotel by design).",
+  "rca_of_the_issue": "No functional defect found in the Call Center feature itself. The authority-above-max case is detected correctly end-to-end (analysis.within_authority=false, requires_human_approval=true, term labelled REQUIRES_HUMAN_APPROVAL, offer stored as OUT_OF_AUTHORITY) — the gap is purely presentational: CallReview.js never reads those two fields, so a price INR 8.5/unit above the authorized maximum is displayed alongside a positive '17.31% improvement' badge, and the downstream compare endpoint does not filter such offers."
+}

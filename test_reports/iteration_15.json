@@ -1,0 +1,51 @@
+{
+  "summary": "Iteration 15 — full backend + frontend verification of (1) the Telegram login-persistence bug fix, (2) the human-approval Accept-Order gate, (3) GET /api/telegram/orders + /alerts, (4) the always-injected default tile vendor in Auto-Sourcing, (5) the reverse-auction 'Final Comparison' leaderboard + accept modal UI, plus regressions. New suite /app/backend/tests/test_telegram_orders_and_defaults.py: 18/18 PASSED. Previous suite test_gemini_and_sourcing.py re-run: 15/15 PASSED. BUG FIX CONFIRMED: POST /api/telegram/link/verify with no pending login returns a clean 409 'Start the login first' (not 500), 401 unauth, 422 on missing code; GET /api/telegram/status returns linked:true AND authorized:true after multiple backend hot-reload restarts during this run — real-world proof the persisted Telethon session survives restarts (no session/api_hash leaked in the status payload). ACCEPT GATE: unknown deal id -> 404 'Deal not found'; ACTIVE deal with no quote (3de86d41…) -> 400 'No quoted price yet for this vendor'; already-ordered deal (ebfd99d9…) -> 409 'Order already placed for this vendor'; unauth -> 401. The 200 path was NOT executed live (real Telegram side effect, per instructions) but was verified by code review + by the persisted artefact of the earlier real accept: /api/telegram/orders returns 1 order (vendor 'Srinivasa Gowda', +919980402205, price 420, INR, status ACCEPTED, total 420000, deal_id ebfd99d9…) whose id matches deal.order_id and whose deal is ORDER_PLACED — i.e. the 200 path demonstrably creates the order and flips the deal. /alerts returns [] (200, array). DEFAULT VENDOR: tile request -> candidates[0] == 'SLV Ceramics (Muddinapalya)' / +919980402205 / default:true, appears exactly once, telegram_reachable resolved true; 'industrial ball bearings' -> SLV never injected and no candidate carries default. Validation max_price<target_price -> 400. Regression: admin login + /auth/me OK, /api/dashboard/stats 200, /api/ai/status active_provider 'gemini' with no AIza*/sk-* secret leakage, no raw mongo '\"_id\"' in any response. FRONTEND (Playwright, 1920x1080): login->dashboard OK; /telegram deal list renders both deals; ORDER_PLACED deal shows 'Order placed at INR 420.' banner and correctly HIDES deal-accept-btn; deal with a quote shows enabled 'Place order @ INR 440' (deal-accept-btn) with the 'nothing is ordered automatically' copy; /sourcing campaign detail renders src-leaderboard 'Final Comparison · Reverse Auction' with src-rank-0 (winner badge, Negotiating chip, INR 440) and the src-best header banner; src-accept-<phone> opens src-accept-modal showing vendor/material/qty/final price/order total INR 440,000 + last chat lines with an enabled src-accept-confirm; cancel closes it (order was NOT confirmed — no real side effect); discover form shows 'Maximum price must be >= target price' in src-error for max<target. No console errors besides React Router v7 future-flag warnings.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "POST /api/telegram/deals/{id}/accept", "issue": "Not idempotent/atomic: the order_id guard is a read-then-insert, so two concurrent accepts on the same deal can create two orders and send two Telegram confirmations. Use a conditional update (find_one_and_update on {id, order_id: None}) as the lock."},
+      {"endpoint": "POST /api/telegram/deals/{id}/accept", "issue": "If the org's Telethon client is missing from memory (clients.get(org) is None), the order row is still created and the deal flipped to ORDER_PLACED but NO confirmation is sent to the vendor and the API still returns 200 — silent divergence. Return a warning flag (e.g. vendor_notified:false) in the response."},
+      {"endpoint": "GET /api/system/status", "issue": "STILL from iteration 14: hardcodes provider 'openai' + LLM_MODEL while the active provider is gemini. /api/ai/status is correct."},
+      {"endpoint": "POST /api/sourcing/discover", "issue": "STILL from iteration 14: no rate limit/entitlement on an endpoint doing 2 live web searches + an LLM call per request. 8 campaigns now exist on the admin org from test runs."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [
+      {"flow": "Sourcing leaderboard -> Accept order", "issue": "AutoSourcing.js acceptOrder() swallows the error ('catch (e) { /* toast handled by caller */ }' — there is no caller handling it). A 400/409/500 from /telegram/deals/{id}/accept leaves the modal open with no message; the user only sees the spinner stop. The Telegram page version does show window.alert(). Add an inline error state in the modal.", "affected_selectors": ["src-accept-confirm", "src-accept-modal"]},
+      {"flow": "Sourcing launch", "issue": "launch() also swallows errors silently (empty catch) — if /campaigns/{id}/launch 400s ('Link your Telegram account first') nothing is shown to the user.", "affected_selectors": ["src-launch-all", "src-launch-selected"]}
+    ],
+    "design_issues": [
+      {"screen": "Telegram AI — deal list vs detail", "issues": ["Opening a deal replaces the whole negotiations list (single-column swap); only the small X (deal-close) returns. Consider keeping the list visible or adding an explicit 'Back to negotiations' control — this also makes automated navigation between deals non-obvious."]}
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_telegram_orders_and_defaults.py",
+    "/app/backend/tests/test_gemini_and_sourcing.py",
+    "/app/test_reports/pytest/it15.xml",
+    "/app/test_reports/pytest/it15_regression.xml"
+  ],
+  "action_items": [
+    "Make accept_order atomic/idempotent (conditional update on order_id: None) to prevent double orders + double vendor messages.",
+    "Surface accept/launch API errors in AutoSourcing.js (both catch blocks are silent) — add an error line inside src-accept-modal.",
+    "Return/handle the 'client not connected' case in accept_order so an order is never recorded without notifying the vendor.",
+    "Fix /api/system/status to report the real active provider/model (carried over from iteration 14).",
+    "Optional: purge the 8 accumulated test sourcing campaigns; telegram_userbot.py is 721 lines — consider splitting (linking / negotiation loop / orders+alerts)."
+  ],
+  "critical_code_review_comments": [
+    "link_start persists api_id/api_hash/phone_code_hash and the Telethon session string to Mongo in plaintext; _get_login_client rebuilds from it correctly and link_verify deletes the pending row on success and on PhoneCodeExpired. Logic is correct, but consider encrypting-at-rest / TTL-expiring the telegram_login row (a stale pending login lives forever and would make verify attempt a sign_in with an expired code).",
+    "GET /api/telegram/status exposes only linked/authorized/username/phone/pending_code — verified no session or api_hash leakage.",
+    "accept_order guardrails are correct and ordered: 404 -> no-quote 400 -> above-max 400 -> already-ordered 409; agreed_price takes precedence over latest_quote; total computed only when quantity exists.",
+    "auto_sourcing._default_vendors() injects SLV first and registers its phone in phones_seen, so a duplicate from web extraction cannot re-add it (verified: exactly one occurrence). _TILE_KEYWORDS includes granite/marble/flooring, so e.g. 'marble countertops' would also pull the tiles vendor — intentional? worth confirming.",
+    "auto_sourcing.launch() now only sets NEGOTIATING when >=1 deal launched (fix from iteration 14 confirmed by code review; endpoint deliberately not called).",
+    "_emit_alert swallows the alerts insert exception silently (bare except: pass) — an alert can be lost with no log line."
+  ],
+  "updated_files": ["/app/backend/tests/test_telegram_orders_and_defaults.py"],
+  "success_rate": {"backend": "100% (18/18 new + 15/15 regression)", "frontend": "100% of tested flows (leaderboard, accept modal, deal accept button, validation)"},
+  "seed_data_creation": "2 new sourcing campaigns created by the real /api/sourcing/discover calls (tiles + ball bearings). For the UI leaderboard/accept-button test I TEMPORARILY set latest_quote=440 on existing ACTIVE deal 3de86d41b0bc4148a6df3f1f24e0ddb8 and reset it to null immediately after (verified: deal is back to ACTIVE, latest_quote null, order_id null; orders=1, alerts=0 — unchanged). No order was placed, no Telegram message sent, link/start and campaigns/launch never called.",
+  "should_call_test_agent_after_fix": false,
+  "should_main_agent_self_test": true,
+  "test_credentials": "admin@negobuy.ai / NegoBuy@2026 (from /app/memory/test_credentials.md) — works.",
+  "context_for_next_testing_agent": "Run /app/backend/tests/test_telegram_orders_and_defaults.py with -p no:randomly. It is data-adaptive (picks a no-quote deal for 400 and an order_id deal for 409) and never calls link/start or campaigns/launch — keep that rule. Deals: 3de86d41… ACTIVE/no quote, ebfd99d9… ORDER_PLACED@420 with order a2abd780…. Campaign 010224b70ffd4f7bbb77b54ebe0e065e is the only one with a launched deal, so it is the only one whose UI leaderboard can render — it needs a non-null latest_quote on that deal to show (toggle it in Mongo and restore, as done here). Note: editing files under /app/backend/tests triggers a backend watchfiles reload — this is actually a free proof of Telegram session persistence.",
+  "rca_of_the_issue": "Original bug: pending Telegram login (Telethon auth key + phone_code_hash) was in-memory only, so any backend restart between /link/start and /link/verify wiped it and verify returned 409 'Start the login first'. Fix verified: link_start upserts {api_id, api_hash, phone, phone_code_hash, session} into telegram_login and _get_login_client() rebuilds the client from that row on verify; 409 is now only returned when nothing is genuinely pending (asserted). The linked admin session also survived several backend reloads during this run (status authorized:true throughout)."
+}

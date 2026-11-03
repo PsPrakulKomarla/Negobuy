@@ -1,0 +1,29 @@
+{
+  "summary": "Fully validated Razorpay TEST-mode billing (backend + frontend). 9/9 pytest cases pass including plans catalog, order creation for mission (₹69/6900 paise) & pro (₹119/11900 paise), HMAC signature verify (valid activates + persists subscription active/plan=pro, invalid returns 400 and does not activate, verify is idempotent). Frontend /pricing renders 3 cards with correct data-testids (plan-original-*, plan-price-*, plan-discount-*, plan-cta-*), strike-through ₹349/₹499, payable ₹69/₹119, discount badges '80% OFF · save ₹280/month' and '76% OFF · save ₹380/month'. Login + clicking plan-cta-mission triggers POST /api/billing/orders (200), loads checkout.razorpay.com/v1/checkout.js and opens the Razorpay Checkout modal (razorpay-container element, Test Mode ribbon visible) with no JS errors. Pro CTA correctly shows 'Current plan' after backend verify test activated pro on the admin user.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_billing_razorpay.py",
+    "/app/test_reports/pytest/billing_razorpay.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "billing.py still has legacy Stripe stubs (stripe_configured, POST /api/billing/checkout/{plan_id}, POST /api/billing/orders/{plan_id}) that are superseded by payments.py. Consider removing to avoid ambiguity: /api/billing/orders (JSON body) in payments.py is the live one; the path-param variant in billing.py returns a stub 'READY' response.",
+    "payments.py:56 fallback amount 100000 (₹1000) is dead code since PLANS always have price; safe but misleading — remove or replace with a hard error.",
+    "Badge component in components/ui.js was not forwarding data-testid — fixed here (spread ...rest). Recommend the same pattern for any other UI wrappers to keep testability."
+  ],
+  "updated_files": [
+    "/app/frontend/src/components/ui.js (Badge now forwards data-testid/other props)",
+    "/app/backend/tests/test_billing_razorpay.py (new pytest suite)"
+  ],
+  "success_rate": {"backend": "100% (9/9)", "frontend": "100%"},
+  "test_credentials": "admin@negobuy.ai / NegoBuy@2026",
+  "seed_data_creation": "Test suite creates 2 Razorpay TEST orders (mission + pro) and activates the pro subscription on the admin org via a valid HMAC signature with a synthetic pay_TESTVALID001 payment_id. This upgrades admin.plan to 'pro' — subsequent runs of the frontend flow show 'Current plan' on the Pro card. To retest a fresh purchase flow, reset admin.plan to 'free' in the users collection or use a fresh account.",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Razorpay is fully wired in TEST mode. Signature verification uses HMAC-SHA256 over 'order_id|payment_id' with RAZORPAY_KEY_SECRET. If retesting frontend checkout after admin was already upgraded, either delete the subscription for the admin org, downgrade admin to plan='free', or test with a freshly registered user."
+}

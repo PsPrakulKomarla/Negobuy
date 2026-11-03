@@ -2,20 +2,19 @@ import React from "react";
 import { NavLink, Outlet, useNavigate, Link } from "react-router-dom";
 import {
   LayoutDashboard,
-  Target,
-  Plus,
   CreditCard,
   LogOut,
-  ChevronRight,
-  Users,
+  Send,
+  Sparkles,
+  ClipboardList,
 } from "lucide-react";
 import { useAuth } from "../context/AuthContext";
 
 const NAV = [
   { to: "/dashboard", label: "Command Center", icon: LayoutDashboard },
-  { to: "/missions", label: "Missions", icon: Target },
-  { to: "/missions/new", label: "New Mission", icon: Plus },
-  { to: "/team", label: "Team", icon: Users },
+  { to: "/sourcing", label: "Auto-Sourcing", icon: Sparkles },
+  { to: "/telegram", label: "Telegram AI", icon: Send },
+  { to: "/orders", label: "Orders", icon: ClipboardList },
   { to: "/plans", label: "Plans", icon: CreditCard },
 ];
 

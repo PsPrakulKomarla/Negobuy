@@ -1,0 +1,53 @@
+{
+  "summary": "Independent E2E validation of the NEW Direct Business Negotiation feature (/api/direct-negotiation + /direct UI) plus regression of the Call Center hardening. Backend: 29 new pytest tests (tests/test_direct_negotiation.py 28 + tests/test_direct_fallback_eligible.py 1) — ALL PASS. Covered: prepare (mission source=direct_negotiation + business vendor + shared negotiation thread + Requirement Intelligence + full plan incl. opening_line + frozen authority + honest providers with whatsapp_fallback=NOT_CONFIGURED), inverted-authority 400, list + full GET, cross-org 404 (registered a 2nd org), explicit-approval TEST call via /api/voice/console (SIMULATED_COMPLETE with transcript+analysis) and the shared-memory linkage (channel='phone' event appended to the negotiation thread), controlled WhatsApp fallback (SIMULATED honest state, one stored kind='fallback' message, thread event, audit entry, 2nd call 409, simulate=false -> NOT_CONFIGURED, non-eligible call_ref -> 400, seeded 'no-answer' call_ref -> 200 eligible), shared-memory WhatsApp reply (unit_price 460 extracted, within_authority=false vs max 450, inbound+outbound stored), unified chronological timeline, final report (summary/terms with valid statuses/self_review/within_authority + 400 with no conversation), decision gate (APPROVE_NEXT audited as human_approved, invalid action 400), and confirmed NO purchases/orders/purchase_orders docs were created and mission stayed REQUIREMENT_REVIEW. Call Center regression: config inverted/negative price 400, webhooks 401 without token, voice-start + status-callback 409 on an UNAPPROVED session (session stayed CONFIGURED/approved=false). Frontend: full Playwright E2E — login -> sidebar 'Direct Negotiation' -> form -> prepare (~14s) -> review (requirement, plan with key/delivery/payment questions + AI opening + provider statuses incl. 'NOT CONFIGURED' + mode toggle) -> start AI test call -> run view with stage-visual, unified timeline, call transcript (AI/BUSINESS/SYSTEM lines) -> WhatsApp reply through the shared brain (AI counter at 450, offers panel flags 'exceeds max' vs 'within authority') -> generate report (dn-authority-warning red banner shown) -> Approve next recorded in the timeline. CallReview OUT_OF_AUTHORITY page shows the red authority-warning banner and no '% improvement' badge. ONE REAL BUG: the UI 'Trigger WhatsApp fallback' button always fails with 400 after a successful TEST call.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "POST /api/direct-negotiation/{id}/fallback", "issue": "Returns 400 when call_ref points to a SIMULATED_COMPLETE call. Backend behaviour is arguably correct (only provider-confirmed no-answer is eligible), but the UI always passes the last call_ref, so the documented fallback flow is unreachable after a TEST call — see frontend integration issue."},
+      {"endpoint": "POST /api/direct-negotiation/prepare", "issue": "mission.unit is computed as `body.quantity and requirement.get('unit')` — evaluates to 0/None-ish for quantity=0 and is a confusing truthiness expression; should be `requirement.get('unit')`."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "DirectNegotiation StageVisual", "issue": "stage 'offer'/'idle' both render the label 'IDLE'; after 'AI test negotiation complete' the visual still says IDLE instead of a completed/offer state", "selector": "[data-testid=\"stage-visual\"]", "priority": "LOW"},
+      {"component": "CallReview summary badges", "issue": "analysis.negotiation_result badge still renders a positive 'IMPROVED' chip in primary colour even when within_authority=false (the red banner is present, so cosmetic only)", "selector": "[data-testid=\"call-summary\"]", "priority": "LOW"}
+    ],
+    "integration_issues": [
+      {"flow": "Direct Negotiation -> Trigger WhatsApp fallback", "issue": "triggerFallback() always sends call_ref: callRef. After a TEST call the call status is SIMULATED_COMPLETE, which the backend rejects with 400 'Call status ... is not a fallback-eligible no-answer'. Reproduced in the browser: console 400, no message appears in the WhatsApp panel ('No WhatsApp messages yet'). The fallback button is also always visible even when the call succeeded. Fix: only offer/send the fallback when the call actually ended no-answer/failed (or omit call_ref for simulated runs), and disable/hide the button otherwise.", "affected_selectors": ["[data-testid=\"dn-fallback-btn\"]", "[data-testid=\"dn-whatsapp\"]"]},
+      {"flow": "Direct Negotiation persistence", "issue": "All state (prep/mission_id/phase) is component-local; a page reload or navigating away permanently loses the run — and GET /api/direct-negotiation (list) is never consumed by any UI, so previously created direct negotiations are unreachable. Recommend a deep link (/direct/:missionId) + a recent-negotiations list.", "affected_selectors": ["[data-testid=\"direct-negotiation\"]"]}
+    ],
+    "design_issues": [
+      {"screen": "Direct Negotiation run view", "issues": ["Long simulated call (~30-40s) shows no progress indicator in the run view beyond the static stage visual", "Fallback error surfaces only as a transient toast; no inline error state in the WhatsApp panel"]}
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_direct_negotiation.py",
+    "/app/backend/tests/test_direct_fallback_eligible.py",
+    "/app/test_reports/pytest/direct_negotiation.xml"
+  ],
+  "action_items": [
+    "HIGH: Fix DirectNegotiation.triggerFallback — don't pass a call_ref for a completed/simulated call (or gate the button on a no-answer/failed call status). Currently the WhatsApp fallback is impossible from the UI after a successful test call (400).",
+    "LOW: StageVisual should render a distinct label for stage 'offer' (currently falls through to 'idle').",
+    "LOW: CallReview — suppress or recolour the 'IMPROVED' negotiation_result badge when within_authority === false.",
+    "LOW: Add a /direct/:missionId deep link + consume GET /api/direct-negotiation so past direct negotiations are resumable.",
+    "LOW: prepare(): mission['unit'] expression `body.quantity and requirement.get('unit')` should just be `requirement.get('unit')`."
+  ],
+  "critical_code_review_comments": [
+    "direct_negotiation.py _business(db, mission_id) queries vendors WITHOUT organization_id — safe today because _mission() already scopes the mission, but add organization_id to the filter for defence in depth.",
+    "generate-report / full / timeline read voice_calls and messages by mission_id only (no organization_id filter); rely on _mission scoping but tighten for consistency.",
+    "Anti-spam fallback check is a plain find_one + insert (no unique index) — two concurrent requests could both pass; consider a unique index on (mission_id, kind='fallback').",
+    "DirectNegotiation.js is 579 lines and holds form+review+run in one component; consider splitting as it grows.",
+    "Verified: no endpoint in direct_negotiation.py or call_center.py writes to purchases/orders — human approval only records intent."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_direct_negotiation.py",
+    "/app/backend/tests/test_direct_fallback_eligible.py"
+  ],
+  "success_rate": {"backend": "100% (29/29)", "frontend": "90% (all flows pass except the WhatsApp fallback button)"},
+  "seed_data_creation": "Created 4 TEST_ direct-negotiation missions (TEST_Sharma Tiles & Sanitary, TEST_Empty Traders, TEST_NoAnswer Traders, TEST_UI Sharma Tiles, TEST_UI2 Sharma Tiles) + a throwaway second-org user TEST_dn_*@qamail.com for isolation checks. A temporary voice_calls doc with status 'no-answer' was inserted and deleted within the test.",
+  "should_call_test_agent_after_fix": false,
+  "should_main_agent_self_test": true,
+  "test_credentials": "admin@negobuy.ai / NegoBuy@2026 (from /app/memory/test_credentials.md)",
+  "context_for_next_testing_agent": "New suite tests/test_direct_negotiation.py runs in ~90s (ordered classes share module-level STATE; run the whole file, not individual classes after TestPrepare). Registration requires 'organization_name' and rejects .test email TLDs. No live Exotel call was attempted this iteration. The only open functional defect is the UI fallback 400 (call_ref of a SIMULATED_COMPLETE call); backend fallback itself is verified working both simulated and with an eligible no-answer call.",
+  "rca_of_the_issue": "UI fallback failure: DirectNegotiation.js triggerFallback() posts {simulate:true, call_ref: callRef}; callRef is the session_ref of the just-approved TEST call whose status is SIMULATED_COMPLETE. direct_negotiation.whatsapp_fallback validates call status against FALLBACK_STATUSES {no-answer, busy, failed, unreachable, canceled, call_dropped} and raises 400 otherwise. Reproduction: /direct -> prepare -> start AI test call -> wait for transcript -> click dn-fallback-btn -> POST 400, WhatsApp panel stays empty. Mitigation: send call_ref only when the call status is fallback-eligible, and hide/disable the fallback button otherwise."
+}

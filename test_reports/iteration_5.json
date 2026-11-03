@@ -1,0 +1,28 @@
+{
+  "summary": "Backend-only Exotel integration pass — 14/14 tests PASSED (100%) via /app/backend/tests/test_exotel.py. Verified: (1) GET /api/voice/exotel/status requires auth (401) and returns provider='exotel', configured=false, state='NOT_CONFIGURED', missing includes 'EXOTEL_CALLER_ID', webhook_secured=true, with NO secret values leaked. (2) POST /api/voice/exotel/call without bearer → 401; with bogus mission_id/vendor_id (admin auth) → 404. (3) Full mocked flow: created mission (budget 100000, qty 100), discovered a real vendor (TradeWheel) after ~25s of polling, POST /call returned status='NOT_CONFIGURED' with session_ref and NO credentials. (4) session-start Passthru webhook: WRONG token → 401, unknown CustomField → 404, valid call returns mission summary + authority {max_price_per_unit=1000, target_price_per_unit=900} + rules forbidding commitments, no secrets. (5) Authority read-only guarantee: posting max_price_per_unit=999999/target_price_per_unit=999999/authority='unlimited' to session-start did NOT change stored authority — re-fetched values still 1000/900. (6) session-end with CallStatus='completed', DialCallDuration='95', RecordingUrl, price_per_unit='850' → status='recorded'; mission offers count unchanged (no auto-offer) and mission status not moved to APPROVED/COMPLETED. (7) Idempotency: second identical session-end returned status='duplicate'. (8) Audit log has call_stub_recorded and call_ended events for the org/mission, no Exotel api key/token values present in any audit detail. (9) Regression: GET /api/system/status still 200 and now includes 'exotel' block with state=NOT_CONFIGURED; voice.state='READY', telephony.state='NOT_CONFIGURED' unchanged. Test mission was cleaned up post-run.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/test_exotel.py",
+    "/app/test_reports/pytest/exotel.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "exotel_service.py is clean: credentials read via os.environ, sanitized log line (only ok/http/call_sid), NOT_CONFIGURED branch inserts voice_sessions row + audit event but correctly skips outbound HTTP + does not expose secrets. Idempotency uses session.terminal_recorded flag combined with terminal status — correct.",
+    "_check_webhook_token: when EXOTEL_WEBHOOK_TOKEN is set, mismatched token → 401 (verified). When EXOTEL_WEBHOOK_TOKEN is unset AND provider is fully configured, code refuses with 401 — good defensive default. Consider also logging failed-token attempts at INFO for observability.",
+    "session_start / session_end deliberately ignore any client-sent max_price_per_unit / authority fields (authority is only derived from stored session or backend-computed via _authority(mission)). Confirmed via active mutation test — good.",
+    "server.py continues to grow (~590+ lines with router includes). Still a candidate for split into missions/negotiation modules (carry-over from iteration_3/4).",
+    "Minor: place_outbound_call references `node` inside the return dict in the non-ok branch even though `node` is only defined inside the try; if json parsing fails AND ok is False, `provider_response` correctly falls back to `parsed`. Not exercised in NOT_CONFIGURED path so no impact this pass."
+  ],
+  "updated_files": ["/app/backend/tests/test_exotel.py"],
+  "success_rate": {"backend": "100% (14/14)", "frontend": "not tested (per request)"},
+  "test_credentials": "admin@negobuy.ai / NegoBuy@2026 (admin) — working. Webhook shared secret: nb_exotel_9f2a7c41e8b6d503.",
+  "seed_data_creation": "Test creates one TEST_EXOTEL mission (budget 100000, qty 100, INR, 10 days, 1yr warranty), triggers /discover which persists 1 discovered vendor, then places a NOT_CONFIGURED call producing one voice_sessions doc + one calls doc + audit events. Mission is deleted after the run; vendor/session/call docs remain associated with the (deleted) mission id.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Regression suites now: /app/backend/tests/test_new_features.py, /app/backend/tests/test_audit_pass.py, /app/backend/tests/test_exotel.py. Exotel is intentionally missing EXOTEL_CALLER_ID → /api/voice/exotel/call returns HTTP 200 with body status='NOT_CONFIGURED' (this is honest behavior, not a bug). Webhooks are form-urlencoded; the token comes in as ?token=. Discovery is asynchronous and typically returns first vendor in 20–30s — test polls up to 60s. Free plan cap = 3 active missions, so reuse one mission across steps.",
+  "rca of the issue": "N/A — all assertions passed."
+}

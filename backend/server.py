@@ -26,6 +26,17 @@ import vendor_memory
 import audit
 from payments import router as payments_router, webhook_router as razorpay_webhook_router
 from telephony import router as telephony_router
+from exotel_service import router as exotel_router, live_status as exotel_live_status
+from negotiation_engine import router as negotiation_engine_router
+from call_center import router as call_center_router
+from direct_negotiation import router as direct_negotiation_router
+from voice_bridge import router as voice_bridge_router
+from communication_service import router as communication_router
+import telegram_userbot
+from telegram_userbot import router as telegram_userbot_router
+from auto_sourcing import router as auto_sourcing_router
+from assurance import router as assurance_router
+from mission_orchestrator import router as orchestrator_router
 from landed_cost import compute_landed_cost
 
 app = FastAPI(title="NegoBuy API")
@@ -52,14 +63,25 @@ async def root():
     return {"service": "NegoBuy API", "status": "online"}
 
 
+@core.get("/ai/status")
+async def ai_status(user: dict = Depends(get_current_user)):
+    from ai import provider_status, active_provider_name
+    return {"active_provider": active_provider_name(), "providers": provider_status()}
+
+
 @core.get("/system/status")
 async def system_status(user: dict = Depends(get_current_user)):
     razorpay = ("LIVE" if os.environ.get("RAZORPAY_KEY_ID", "").startswith("rzp_live")
                 else "TEST" if os.environ.get("RAZORPAY_KEY_ID") else "NOT_CONFIGURED")
+    from ai import active_provider_name
+    _prov = active_provider_name()
+    _ai_model = (os.environ.get("GEMINI_MODEL") if _prov == "gemini"
+                 else os.environ.get("XAI_MODEL") if _prov == "xai"
+                 else os.environ.get("LLM_MODEL"))
     return {
         "ai": {"state": "CONFIGURED" if ai_service.is_configured() else "NOT_CONFIGURED",
-               "configured": ai_service.is_configured(), "model": os.environ.get("LLM_MODEL"),
-               "provider": "openai"},
+               "configured": ai_service.is_configured(), "model": _ai_model,
+               "provider": _prov},
         "discovery": {"state": "CONFIGURED", "configured": discovery.search_configured(),
                       "has_key": discovery.has_search_key(), "provider": "tavily"},
         "email": {"state": "CONFIGURED" if email_configured() else "NOT_CONFIGURED",
@@ -68,6 +90,7 @@ async def system_status(user: dict = Depends(get_current_user)):
                   "configured": voice_configured(), "provider": "openai_realtime"},
         "telephony": {"state": "READY" if telephony_configured() else "NOT_CONFIGURED",
                       "configured": telephony_configured(), "provider": "twilio"},
+        "exotel": await exotel_live_status(),
         "whatsapp": {"state": "READY" if wa_configured() else "NOT_CONFIGURED",
                      "configured": wa_configured(), "provider": "meta_cloud_api"},
         "payments": {"state": razorpay, "configured": razorpay != "NOT_CONFIGURED",
@@ -299,6 +322,10 @@ async def negotiate(mission_id: str, vendor_id: str, body: NegotiateBody,
 
     # Create/refresh an offer from the negotiated indicative terms.
     if final["price"]:
+        # Authority enforcement: never persist an offer above the authorized maximum.
+        within_authority = True
+        if max_price is not None and float(final["price"]) > float(max_price):
+            within_authority = False
         offer = {
             "id": uuid.uuid4().hex, "mission_id": mission_id, "vendor_id": vendor_id,
             "vendor_name": vendor["name"], "organization_id": user["organization_id"],
@@ -309,12 +336,21 @@ async def negotiate(mission_id: str, vendor_id: str, body: NegotiateBody,
             "warranty": final["warranty"], "payment_terms": None,
             "reliability_score": vendor.get("reliability_score"),
             "source": "ai_negotiation_preview", "simulation": True,
-            "status": "OPEN", "created_at": now_iso(),
+            "within_authority": within_authority,
+            "status": "OPEN" if within_authority else "OUT_OF_AUTHORITY",
+            "max_authorized_price": max_price, "created_at": now_iso(),
         }
-        await db.offers.delete_many({"mission_id": mission_id, "vendor_id": vendor_id})
+        # Only overwrite prior AI-preview offers — never wipe real email/voice offers.
+        await db.offers.delete_many({"mission_id": mission_id, "vendor_id": vendor_id,
+                                     "source": "ai_negotiation_preview"})
         await db.offers.insert_one(offer)
         await vendor_memory.record_outcome(user["organization_id"], vendor, mission_id,
                                             final["price"], source="negotiation_preview")
+        if not within_authority:
+            await orchestrator.log_action(
+                mission_id, "Negotiation Agent", "Offer exceeds authority",
+                f"[SIMULATION] Vendor held at {mission.get('currency')} {final['price']}/unit, "
+                f"above the authorized max {max_price}. Flagged OUT_OF_AUTHORITY; needs human review.")
     return negotiation
 
 
@@ -391,7 +427,9 @@ async def compare(mission_id: str, user: dict = Depends(get_current_user)):
         except Exception:
             recommendation = None
     if not recommendation:
-        best = min(offers, key=lambda o: o["total_cost"])
+        eligible = [o for o in offers if o.get("within_authority", True)
+                    and o.get("status") != "OUT_OF_AUTHORITY"] or offers
+        best = min(eligible, key=lambda o: o["total_cost"])
         recommendation = {"recommended_offer_id": best["id"], "recommendation_score": 60,
                           "reasoning": "Lowest total landed cost.", "risks": [], "ranking": []}
 
@@ -583,6 +621,16 @@ app.include_router(audit.router)
 app.include_router(payments_router)
 app.include_router(razorpay_webhook_router)
 app.include_router(telephony_router)
+app.include_router(exotel_router)
+app.include_router(negotiation_engine_router)
+app.include_router(call_center_router)
+app.include_router(direct_negotiation_router)
+app.include_router(voice_bridge_router)
+app.include_router(communication_router)
+app.include_router(telegram_userbot_router)
+app.include_router(auto_sourcing_router)
+app.include_router(assurance_router)
+app.include_router(orchestrator_router)
 
 
 @app.on_event("startup")
@@ -590,4 +638,16 @@ async def startup():
     await create_indexes()
     await seed_admin()
     register_realtime(app)
+    try:
+        await telegram_userbot.startup()
+    except Exception as e:
+        print(f"[NegoBuy] telegram userbot startup skipped: {e}")
     print("[NegoBuy] startup complete")
+
+
+@app.on_event("shutdown")
+async def shutdown():
+    try:
+        await telegram_userbot.shutdown()
+    except Exception:
+        pass

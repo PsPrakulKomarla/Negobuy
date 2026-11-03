@@ -109,10 +109,11 @@ export function StatusPill({ status, className = "" }) {
   );
 }
 
-export function Badge({ children, className = "" }) {
+export function Badge({ children, className = "", ...rest }) {
   return (
     <span
       className={`inline-flex items-center text-[10px] font-mono tracking-wider uppercase px-2.5 py-1 rounded-md border border-white/12 bg-white/5 text-white/60 ${className}`}
+      {...rest}
     >
       {children}
     </span>

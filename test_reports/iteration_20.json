@@ -1,0 +1,32 @@
+{
+  "summary": "Iteration 20: verified Emergent Google auth fixes end-to-end. Backend: added 8 new tests (2 in test_auth_health.py + 6 in test_google_monkeypatch.py) covering /api/auth/health shape, structured error codes, and deterministic new-user (blank name) / existing-user / idempotency / upstream-error paths via in-process ASGI + httpx monkeypatch. All 35 auth+receipts tests pass. Frontend browser test confirms StrictMode double-consume regression is fixed (EXACTLY 1 POST to /api/auth/google/session), bogus session redirects to /login, health endpoint reachable, and email login (admin@negobuy.ai) persists across reload.",
+  "backend_issues": { "critical": [], "minor": [] },
+  "frontend_issues": { "ui_bugs": [], "integration_issues": [], "design_issues": [] },
+  "test_report_links": [
+    "/app/backend/tests/test_google_monkeypatch.py",
+    "/app/backend/tests/test_auth_health.py",
+    "/app/backend/tests/test_google_auth.py",
+    "/app/backend/tests/test_receipts_and_auth.py",
+    "/app/test_reports/pytest/iter20_auth.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "auth.py _create_user now safely defaults blank name to email prefix and organization to '<first>\\'s Workspace' — regression for former IndexError on split()[0].",
+    "google_session guards duplicate-email race by re-fetching after IntegrityError and returns structured detail codes (SESSION_INVALID_OR_EXPIRED, GOOGLE_PROFILE_INCOMPLETE, USER_PROVISIONING_FAILED, plus 502 for upstream network) — never 500 on invalid session_id.",
+    "_gsession_cache TTL 300s ensures StrictMode/user-double-click cannot re-consume upstream single-use session_ids; verified idempotent via test.",
+    "GET /api/auth/health returns booleans only + upstream status code; no secret leakage (jwt_secret is a bool).",
+    "Note (non-blocking): server.py still uses on_event startup/shutdown (deprecated in FastAPI); consider migrating to lifespan handlers."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_google_auth.py (updated invalid-session assertion to new detail prefix)",
+    "/app/backend/tests/test_google_monkeypatch.py (new — in-process ASGI + httpx monkeypatch)",
+    "/app/backend/tests/test_auth_health.py (new)"
+  ],
+  "success_rate": { "backend": "100% (35/35)", "frontend": "100% (5/5 critical checks)" },
+  "test_credentials": "admin@negobuy.ai / NegoBuy@2026 (from /app/memory/test_credentials.md)",
+  "seed_data_creation": "Monkeypatch tests create ephemeral users newg_<hex>@example.com; cleaned up in the same async flow via db.users/organizations/memberships deletes. admin@negobuy.ai auto-seeded on startup; verified only 1 admin document exists after existing-user login test.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Auth suite is stable. To rerun: `pytest /app/backend/tests/test_auth_health.py /app/backend/tests/test_google_auth.py /app/backend/tests/test_google_monkeypatch.py /app/backend/tests/test_receipts_and_auth.py`. The monkeypatch file uses httpx.ASGITransport + a smart _FakeAsyncClient that delegates to the real client when 'transport' kwarg is present (needed because our test's HTTP client and auth.google_session both use httpx.AsyncClient). Motor client and _gsession_cache are reset per test via autouse fixture to avoid 'Event loop is closed'. For browser regression, navigate to /dashboard#session_id=<any> and assert page.on('request') captures EXACTLY 1 POST to /api/auth/google/session under React.StrictMode dev.",
+  "rca of the issue": "Two root causes were already fixed in this round: (1) React.StrictMode remount re-invoked AuthCallback's exchange with the same single-use session_id → the second call hit an upstream user_data_not_found and surfaced 'Google sign-in failed' — mitigated by a module-level Set(sid) in AuthCallback plus a 5-minute backend _gsession_cache keyed on session_id. (2) Blank Google profile name caused _create_user to do name.split()[0] → IndexError → 500 for brand-new Google users — mitigated by safe_name fallback (`email.split('@')[0]`) and safe org_name fallback. Both fixes verified: exactly-once network POST in Playwright; blank-name flow returns 200 with name == email prefix in test_new_user_blank_name; idempotent second POST with same sid returns the same 200 payload."
+}

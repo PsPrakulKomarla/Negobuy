@@ -17,11 +17,14 @@ import {
   Radio,
   Mail,
   FileDown,
+  PhoneCall,
 } from "lucide-react";
 import { toast } from "sonner";
 import api, { formatApiError } from "../lib/api";
 import BuyerScene from "../three/BuyerScene";
 import OutreachModal from "../components/OutreachModal";
+import CallHistory from "../components/CallHistory";
+import MissionCommandCenter from "../components/MissionCommandCenter";
 import {
   Button,
   Card,
@@ -267,6 +270,8 @@ export default function MissionDetail() {
         </Button>
       </div>
 
+      <MissionCommandCenter missionId={id} />
+
       <Card glass className="p-4 mb-6">
         <Pipeline status={mission.status} />
       </Card>
@@ -320,6 +325,8 @@ export default function MissionDetail() {
               )}
             </Card>
           </div>
+
+          <CallHistory missionId={id} />
         </div>
 
         {/* Main */}
@@ -423,6 +430,11 @@ export default function MissionDetail() {
                           <Button variant="secondary" size="sm" onClick={() => negotiate(v.id)} disabled={negotiatingId === v.id} data-testid={`negotiate-${v.id}`}>
                             {negotiatingId === v.id ? <Spinner /> : <Handshake size={14} />} Negotiate
                           </Button>
+                          <Link to={`/missions/${id}/call-console/${v.id}`}>
+                            <Button variant="ghost" size="sm" data-testid={`exotel-call-${v.id}`} title="AI negotiation call">
+                              <PhoneCall size={14} />
+                            </Button>
+                          </Link>
                           <Link to={`/missions/${id}/call/${v.id}`}>
                             <Button variant="ghost" size="sm" data-testid={`call-${v.id}`}>
                               <Phone size={14} />

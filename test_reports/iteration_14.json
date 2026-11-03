@@ -1,0 +1,36 @@
+{
+  "summary": "Backend-only verification of (A) the new pluggable AI provider abstraction with Gemini as the ACTIVE provider and (B) the new Auto-Sourcing feature. Created /app/backend/tests/test_gemini_and_sourcing.py — 15/15 pytest tests PASSED. Verified: GET /api/ai/status requires auth (401 unauth) and returns exactly {active_provider:'gemini', providers:{gemini:'CONFIGURED', openai:'CONFIGURED', xai:'NOT_CONFIGURED'}} with NO API key / secret leakage (asserted against every KEY/TOKEN/SECRET value in backend/.env plus AIza*/sk-*/AQ.* regex patterns; also checked /api/system/status). Gemini generation path proven live: POST /api/missions/extract on a natural procurement request returned structured JSON (title, quantity=500, currency INR) in ~15s. Missions CRUD regression passed (create->GET->PATCH->GET->list->DELETE->404, no _id leakage). Auto-Sourcing: POST /api/sourcing/discover (real Tavily web search + Gemini extraction) returned 200 with 6 candidates, every phone a valid +91 E.164 Indian mobile, unique, real supplier URLs (kajariaceramics.com dealer pages), telegram_reachable computed as real booleans (org Telegram IS linked; 1 of 6 reachable), status FOUND, deal_id null. Validation: max_price<target_price -> 400; material length<2 -> 422; unauth -> 401; GET /campaigns lists persisted campaign; GET /campaigns/{id} returns campaign with 'best' key; unknown id -> 404. /api/dashboard/stats -> 200. NO launch endpoint was called, no Telegram deals created, no phone calls made.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "GET /api/system/status", "issue": "ai block is hardcoded to provider:'openai' and model:os.environ['LLM_MODEL'] (returns 'gpt-5.6-terra') even though the ACTIVE provider is gemini/gemini-3.6-flash. Misleading for the UI/system-status page — should read from ai.active_provider_name() and the active provider's model."},
+      {"endpoint": "POST /api/sourcing/discover", "issue": "No plan/entitlement or rate limiting on an endpoint that performs 2 live web searches + an LLM extraction per call (cost/abuse surface). Missions are quota-gated (402) but sourcing campaigns are not."},
+      {"endpoint": "backend logs", "issue": "google-genai emits a repeated warning: \"Direct use of automatic function calling (AFC) in AsyncModels.generate_content is not recommended...\". Harmless but noisy; can be silenced by passing automatic_function_calling disabled in GenerateContentConfig."}
+    ]
+  },
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/test_gemini_and_sourcing.py",
+    "/app/test_reports/pytest/it14_full.xml"
+  ],
+  "action_items": [
+    "Fix /api/system/status to report the real active AI provider + model (currently hardcoded 'openai' / LLM_MODEL) so the system status UI is not misleading now that AI_PROVIDER=gemini.",
+    "Consider entitlement/rate limiting on POST /api/sourcing/discover (paid web search + LLM per call).",
+    "Optional cleanup: 13 leftover active missions exist on the admin org from earlier iterations, which trips the free-plan 3-active-mission limit (402) for any new mission creation. My test temporarily cancelled the minimum needed and restored their original statuses, but consider purging leftover test missions."
+  ],
+  "critical_code_review_comments": [
+    "ai/provider_factory.py caches provider instances in a module-level dict and GeminiProvider reads GEMINI_API_KEY only in __init__ — a .env change requires a backend restart to take effect. Acceptable, but note it (provider_status() would keep reporting the stale state within a process).",
+    "auto_sourcing.launch() mutates camp['candidates'] and always sets campaign status to 'NEGOTIATING' even when zero deals were launched (e.g. all candidates not on Telegram) — status should reflect the actual outcome. (Not executed in this run, code-review only.)",
+    "auto_sourcing.discover(): if discovery.web_search fails for all queries it returns 502 with a generic message; the underlying exception is only logged. Fine, but consider distinguishing 'search key missing' from 'no results'.",
+    "GeminiProvider.check_provider_status() only validates key prefix (AQ./AIza) — a revoked/invalid key still reports CONFIGURED; /api/ai/status can therefore be optimistic. Acceptable (no network call in a status endpoint).",
+    "No secret exposure found in /api/ai/status or /api/system/status — verified programmatically against all backend/.env secret values."
+  ],
+  "updated_files": ["/app/backend/tests/test_gemini_and_sourcing.py"],
+  "success_rate": {"backend": "100% (15/15)", "frontend": "not tested (backend-only request)"},
+  "seed_data_creation": "1 TEST mission (created then deleted). 1 sourcing campaign persisted via the real /api/sourcing/discover call (3 campaigns now exist on the admin org). Temporarily cancelled leftover active missions to clear the free-plan quota and restored their original statuses in the same run.",
+  "should_call_test_agent_after_fix": false,
+  "should_main_agent_self_test": true,
+  "test_credentials": "admin@negobuy.ai / NegoBuy@2026 (from /app/memory/test_credentials.md) — works, returns access_token.",
+  "context_for_next_testing_agent": "Reusable suite: /app/backend/tests/test_gemini_and_sourcing.py (run with -p no:randomly). It handles the free-plan 402 mission quota automatically and restores mutated statuses. It deliberately NEVER calls POST /api/sourcing/campaigns/{id}/launch (real Telegram side effects) — keep that rule. The org's Telegram account IS linked, so discover really resolves reachability. Gemini path is live and fast (~10-20s for extract). /api/system/status still hardcodes provider 'openai' — recheck after the main agent fixes it.",
+  "rca_of_the_issue": "N/A — no defects reproduced in the features under test. The only mismatch is a cosmetic/stale hardcoded provider+model in /api/system/status, which was never updated when ai_service was routed through the new provider abstraction."
+}

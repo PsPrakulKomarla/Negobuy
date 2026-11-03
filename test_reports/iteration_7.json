@@ -1,0 +1,24 @@
+{
+  "summary": "Negotiation persona upgrade — Backend 7/7 PASSED. Admin logged in, created 'Persona Test Chairs' mission (qty 500, budget 450000 INR → max_authorized_unit=900, target=810), discovery yielded a vendor within 75s. POST /api/missions/{id}/vendors/{vendor_id}/negotiate {rounds:2} returned 200 with buyer_ai events; buyer messages never contain commit phrases ('deal confirmed', 'order placed', 'we accept', etc.) and every emitted target_price is <= 900. The resulting offer's negotiated_price is <= 900 (server enforces via authority clamp). After negotiation, mission status remained pre-approval (NOT APPROVED/COMPLETED) and no purchase was auto-created for the mission. Voice persona exercised via directly-inserted voice_sessions Mongo doc (session_ref='persona_test_ref_*') + POST /api/voice/exotel/session-start?token=nb_exotel_9f2a7c41e8b6d503 with form CustomField: response includes 'agent_prompt' string that contains the mission title 'Persona Test Chairs', the authority numbers 900 and 810, human-approval/no-commit language ('final approval'/'not commit'/'must not'), and leaks NO secret values (EXOTEL_API_KEY, EXOTEL_API_TOKEN, EMERGENT_LLM_KEY not present in the prompt or response body). Authority is read-only: re-posting the webhook with an extra form field max_price_per_unit=999999 returned stored authority.max_price_per_unit=900 unchanged and target=810. Regression: GET /api/system/status returns 200 with 'exotel' + 'ready' state present; GET /api/audit returns 200 with a list. Test mission and inserted voice_sessions doc cleaned up in fixture teardown.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/test_persona.py",
+    "/app/test_reports/pytest/persona.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "ai_service.negotiation_turn clamps walk_away_price server-side and flips within_authority=false — good. However server.negotiate builds the offer's negotiated_price from the SIMULATED VENDOR's offered_price_per_unit (final['price']), not the buyer's walk_away. If a simulated vendor were to insist on a price > max_authorized, the offer could exceed authority. In this run the vendor stayed below 900, so the test passed, but consider clamping offer.negotiated_price to constraints['max_price'] in server.negotiate (or flagging the offer status='OUT_OF_AUTHORITY' and not creating it).",
+  "ai_service._extract_json only looks for the first '{' … last '}' — if the model emits multiple JSON blocks (rare but possible with reasoning models), it will concatenate them into invalid JSON and fall to the fallback branch. Consider iterating over ```json fences first.",
+  "exotel_service.session_start: session.get('authority') is used as-is when present, which is the correct read-only behavior — but there is no code path that would ever refresh authority from the mission if the mission's budget/qty changed after the session was created. This is by design (authority frozen at call start) but should be documented in the module docstring.",
+  "server.negotiate creates an offer with source='ai_negotiation_preview' + simulation=true. Good separation. But it always overwrites (delete_many + insert_one) any existing offer for that (mission,vendor). If real Exotel offers were persisted with the same shape, they could be wiped. Recommend filtering delete_many by source='ai_negotiation_preview'."
+  ],
+  "updated_files": ["/app/backend/tests/test_persona.py"],
+  "success_rate": {"backend": "100% (7/7)", "frontend": "n/a — backend only"},
+  "test_credentials": "admin@negobuy.ai / NegoBuy@2026 — working. Webhook token: nb_exotel_9f2a7c41e8b6d503.",
+  "seed_data_creation": "Session-scoped: one 'Persona Test Chairs' mission (deleted in teardown) + one voice_sessions doc with session_ref='persona_test_ref_*' inserted directly via motor (deleted in teardown).",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Persona is unified via ai_service.build_agent_prompt(); it is consumed by (a) server.negotiate → ai_service.negotiation_turn (adds NEGOTIATION_JSON_SUFFIX) and (b) exotel_service.session_start → returned as 'agent_prompt' string. Discovery is flaky-prone: poll up to ~75s. Free-plan mission cap = 3; test suite cleans 'Persona Test'/'TEST_' missions at setup. Mongo direct access uses MONGO_URL + DB_NAME from backend/.env. No real Exotel call was placed this round.",
+  "rca of the issue": "No issue found — all 7 assertions pass. Minor risk: server.negotiate builds offer price from simulated vendor's offered_price, not clamped to constraints['max_price']. Reproduction would require a stubborn simulated vendor that refuses to counter below 900; in this run vendor counters stayed within authority so the offer <= 900 assertion passed."
+}

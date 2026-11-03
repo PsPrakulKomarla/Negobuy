@@ -49,6 +49,16 @@ export function AuthProvider({ children }) {
     return persist(data);
   };
 
+  const refreshUser = async () => {
+    try {
+      const { data } = await api.get("/auth/me");
+      setUser(data);
+      return data;
+    } catch (e) {
+      return null;
+    }
+  };
+
   const logout = async () => {
     try {
       await api.post("/auth/logout");
@@ -59,7 +69,7 @@ export function AuthProvider({ children }) {
 
   return (
     <AuthContext.Provider
-      value={{ user, checked, setUser, login, register, logout, googleSession }}
+      value={{ user, checked, setUser, login, register, logout, googleSession, refreshUser }}
     >
       {children}
     </AuthContext.Provider>
